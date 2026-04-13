@@ -1,13 +1,14 @@
 # Databricks notebook source
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+# ]
+# ///
 # Pull income statements, balance sheets, and cash flow statements.
 # Output: UC_VOLUME_PATH/financials/{TICKER}/{income_statements,balance_sheets,cash_flows}.json
 # FMP Sources: F3/F4/F5
-
-# COMMAND ----------
-
-# MAGIC %pip install requests
 
 # COMMAND ----------
 

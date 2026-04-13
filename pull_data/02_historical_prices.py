@@ -1,13 +1,14 @@
 # Databricks notebook source
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+# ]
+# ///
 # Pull historical daily price data for all watchlist tickers.
 # Output: UC_VOLUME_PATH/historical_prices/{TICKER}/prices.json
 # FMP Source: F2 — /stable/historical-price-eod/dividend-adjusted?symbol=...
-
-# COMMAND ----------
-
-# MAGIC %pip install requests
 
 # COMMAND ----------
 
