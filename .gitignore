@@ -4,9 +4,6 @@
 # Claude Code settings
 .claude/
 
-# Experimental scratchpad (may contain hardcoded keys)
-9_scratchpad/
-
 # Secrets — never commit real values
 .env
 .env.*
