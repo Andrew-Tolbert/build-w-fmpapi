@@ -11,7 +11,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../utils/config
+# MAGIC %run ../utils/ingest_config
 
 # COMMAND ----------
 
