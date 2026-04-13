@@ -11,9 +11,9 @@ UC_CATALOG     = "uc"
 UC_SCHEMA      = "wealth"
 UC_VOLUME_PATH = f"/Volumes/{UC_CATALOG}/{UC_SCHEMA}/documents"
 
-def uc_table(name):
-    """Return fully-qualified UC table name."""
-    return f"{UC_CATALOG}.{UC_SCHEMA}.{name}"
+def volume_subdir(name):
+    """Return path to a named subdirectory within the UC Volume."""
+    return f"{UC_VOLUME_PATH}/{name}"
 
 # COMMAND ----------
 
@@ -68,7 +68,7 @@ HISTORY_START_DATE = "2023-01-01"
 
 # COMMAND ----------
 
-print(f"Config loaded — catalog: {UC_CATALOG}, schema: {UC_SCHEMA}")
+print(f"Config loaded — volume: {UC_VOLUME_PATH}")
 print(f"Mode: {'TEST' if TEST_MODE else 'FULL'}")
 print(f"BDC anchors: {BDC_TICKERS}")
 print(f"Equity tickers ({len(EQUITY_TICKERS)}): {EQUITY_TICKERS}")

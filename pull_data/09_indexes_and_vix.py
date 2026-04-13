@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest index quotes, historical index prices, VIX, and index constituents.
-# Targets: uc.wealth.index_quotes, uc.wealth.index_history, uc.wealth.index_constituents
+# Pull index quotes, historical index prices, VIX, and index constituents.
+# Output: UC_VOLUME_PATH/indexes/{index_quotes,index_history,index_constituents}.json
 # FMP Sources: F16/F17/F18/F19
 # Symbols: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (Nasdaq), ^VIX
 
@@ -20,11 +20,9 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 ALL_INDEX_SYMBOLS = INDEX_SYMBOLS + [VIX_SYMBOL]  # ^GSPC, ^DJI, ^IXIC, ^VIX
@@ -68,12 +66,15 @@ print(f"  Total constituents: {len(constituents_df)}")
 
 # COMMAND ----------
 
-for df, table_name in [
-    (quotes_df,         "index_quotes"),
-    (hist_df,           "index_history"),
-    (constituents_df,   "index_constituents"),
+out_dir = volume_subdir("indexes")
+os.makedirs(out_dir, exist_ok=True)
+
+for df, filename in [
+    (quotes_df,       "index_quotes"),
+    (hist_df,         "index_history"),
+    (constituents_df, "index_constituents"),
 ]:
-    target = uc_table(table_name)
-    sdf = spark.createDataFrame(df).withColumn("ingested_at", current_timestamp())
-    sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-    print(f"Written {sdf.count()} rows to {target}")
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    out_path = f"{out_dir}/{filename}.json"
+    df.to_json(out_path, orient="records", indent=2)
+    print(f"Written {len(df)} rows to {out_path}")

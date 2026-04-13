@@ -1,10 +1,9 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest SEC filing metadata and download raw filing documents to UC Volume.
+# Pull SEC filing metadata and download raw filing documents to UC Volume.
 # Focuses on BDC anchor tickers (AINV, OCSL) for covenant analysis.
-# Target table: uc.wealth.sec_filings (metadata)
-# Target volume: UC_VOLUME_PATH/sec_filings/ (raw documents)
+# Output: UC_VOLUME_PATH/sec_filings/metadata.json + raw .htm files
 # FMP Sources: F8/D1 — /stable/sec-filings
 
 # COMMAND ----------
@@ -24,10 +23,7 @@
 import os
 import pandas as pd
 import requests
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -52,21 +48,18 @@ for ticker in BDC_TICKERS:
             print(f"  {ticker} {ftype}: ERROR — {e}")
 
 metadata_df = pd.concat(all_metadata, ignore_index=True) if all_metadata else pd.DataFrame()
+metadata_df["ingested_at"] = pd.Timestamp.now().isoformat()
 print(f"\nTotal filing metadata rows: {len(metadata_df)}")
 
 # COMMAND ----------
 
-# Write metadata table
-target = uc_table("sec_filings")
-sdf = spark.createDataFrame(metadata_df).withColumn("ingested_at", current_timestamp())
-sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-print(f"Written {sdf.count()} metadata rows to {target}")
-
-# COMMAND ----------
-
-# Download raw filing documents to UC Volume
-volume_dir = f"{UC_VOLUME_PATH}/sec_filings"
+volume_dir = volume_subdir("sec_filings")
 os.makedirs(volume_dir, exist_ok=True)
+
+# Write metadata as JSON
+metadata_path = f"{volume_dir}/metadata.json"
+metadata_df.to_json(metadata_path, orient="records", indent=2)
+print(f"Written {len(metadata_df)} metadata rows to {metadata_path}")
 
 downloaded = 0
 for _, row in metadata_df.iterrows():

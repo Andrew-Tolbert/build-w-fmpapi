@@ -1,9 +1,9 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest key metrics and financial ratios for all watchlist tickers.
+# Pull key metrics and financial ratios for all watchlist tickers.
 # These provide pre-computed covenant proxies: netDebtToEBITDA, interestCoverage.
-# Targets: uc.wealth.key_metrics, uc.wealth.financial_ratios
+# Output: UC_VOLUME_PATH/key_metrics/{key_metrics,financial_ratios}.json
 # FMP Sources: F6/F7
 
 # COMMAND ----------
@@ -20,11 +20,9 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -47,11 +45,14 @@ ratios_combined  = pd.concat(ratios_frames,  ignore_index=True) if ratios_frames
 
 # COMMAND ----------
 
-for df, table_name in [
+out_dir = volume_subdir("key_metrics")
+os.makedirs(out_dir, exist_ok=True)
+
+for df, filename in [
     (metrics_combined, "key_metrics"),
     (ratios_combined,  "financial_ratios"),
 ]:
-    target = uc_table(table_name)
-    sdf = spark.createDataFrame(df).withColumn("ingested_at", current_timestamp())
-    sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-    print(f"Written {sdf.count()} rows to {target}")
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    out_path = f"{out_dir}/{filename}.json"
+    df.to_json(out_path, orient="records", indent=2)
+    print(f"Written {len(df)} rows to {out_path}")

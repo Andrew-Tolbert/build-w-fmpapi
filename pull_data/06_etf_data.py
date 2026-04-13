@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest ETF information, holdings, and sector weightings.
-# Targets: uc.wealth.etf_info, uc.wealth.etf_holdings, uc.wealth.etf_sectors
+# Pull ETF information, holdings, and sector weightings.
+# Output: UC_VOLUME_PATH/etf_data/{etf_info,etf_holdings,etf_sectors}.json
 # FMP Sources: F9/F10/F11
 
 # COMMAND ----------
@@ -19,11 +19,9 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -60,12 +58,15 @@ for etf in ETF_TICKERS:
 
 # COMMAND ----------
 
-for df, table_name in [
+out_dir = volume_subdir("etf_data")
+os.makedirs(out_dir, exist_ok=True)
+
+for df, filename in [
     (pd.concat(info_frames,     ignore_index=True) if info_frames     else pd.DataFrame(), "etf_info"),
     (pd.concat(holdings_frames, ignore_index=True) if holdings_frames else pd.DataFrame(), "etf_holdings"),
     (pd.concat(sector_frames,   ignore_index=True) if sector_frames   else pd.DataFrame(), "etf_sectors"),
 ]:
-    target = uc_table(table_name)
-    sdf = spark.createDataFrame(df).withColumn("ingested_at", current_timestamp())
-    sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-    print(f"Written {sdf.count()} rows to {target}")
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    out_path = f"{out_dir}/{filename}.json"
+    df.to_json(out_path, orient="records", indent=2)
+    print(f"Written {len(df)} rows to {out_path}")

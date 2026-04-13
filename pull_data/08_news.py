@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest recent stock news for all watchlist tickers.
-# Target: uc.wealth.stock_news
+# Pull recent stock news for all watchlist tickers.
+# Output: UC_VOLUME_PATH/stock_news/stock_news.json
 # FMP Source: F15 — /stable/stock-news
 
 # COMMAND ----------
@@ -19,11 +19,9 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -42,11 +40,14 @@ for ticker in EQUITY_TICKERS:
         print(f"  {ticker}: ERROR — {e}")
 
 news_df = pd.concat(news_frames, ignore_index=True) if news_frames else pd.DataFrame()
+news_df["ingested_at"] = pd.Timestamp.now().isoformat()
 print(f"\nTotal articles: {len(news_df)}")
 
 # COMMAND ----------
 
-target = uc_table("stock_news")
-sdf = spark.createDataFrame(news_df).withColumn("ingested_at", current_timestamp())
-sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-print(f"Written {sdf.count()} rows to {target}")
+out_dir = volume_subdir("stock_news")
+os.makedirs(out_dir, exist_ok=True)
+out_path = f"{out_dir}/stock_news.json"
+
+news_df.to_json(out_path, orient="records", indent=2)
+print(f"Written {len(news_df)} articles to {out_path}")

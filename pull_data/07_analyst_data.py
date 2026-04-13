@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest analyst estimates, price target consensus, and analyst ratings.
-# Targets: uc.wealth.analyst_estimates, uc.wealth.price_targets, uc.wealth.analyst_ratings
+# Pull analyst estimates, price target consensus, and analyst ratings.
+# Output: UC_VOLUME_PATH/analyst_data/{analyst_estimates,price_targets,analyst_ratings}.json
 # FMP Sources: F12/F13/F14
 
 # COMMAND ----------
@@ -19,11 +19,9 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -51,12 +49,15 @@ for ticker in EQUITY_TICKERS:
 
 # COMMAND ----------
 
-for df, table_name in [
+out_dir = volume_subdir("analyst_data")
+os.makedirs(out_dir, exist_ok=True)
+
+for df, filename in [
     (pd.concat(estimates_frames, ignore_index=True) if estimates_frames else pd.DataFrame(), "analyst_estimates"),
     (pd.concat(targets_frames,   ignore_index=True) if targets_frames   else pd.DataFrame(), "price_targets"),
     (pd.concat(ratings_frames,   ignore_index=True) if ratings_frames   else pd.DataFrame(), "analyst_ratings"),
 ]:
-    target = uc_table(table_name)
-    sdf = spark.createDataFrame(df).withColumn("ingested_at", current_timestamp())
-    sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-    print(f"Written {sdf.count()} rows to {target}")
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    out_path = f"{out_dir}/{filename}.json"
+    df.to_json(out_path, orient="records", indent=2)
+    print(f"Written {len(df)} rows to {out_path}")

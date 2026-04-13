@@ -1,10 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest earnings call transcripts for BDC anchor tickers (AINV, OCSL).
-# Stores full text in UC table and raw text files in UC Volume for RAG indexing.
-# Target table: uc.wealth.transcripts
-# Target volume: UC_VOLUME_PATH/transcripts/
+# Pull earnings call transcripts for BDC anchor tickers (AINV, OCSL).
+# Output: UC_VOLUME_PATH/transcripts/transcripts_metadata.json + raw .txt files
 # FMP Source: D3 — /stable/earning-call-transcript
 
 # COMMAND ----------
@@ -23,10 +21,7 @@
 
 import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -42,7 +37,7 @@ QUARTERS_TO_FETCH = [
 # COMMAND ----------
 
 transcript_records = []
-volume_dir = f"{UC_VOLUME_PATH}/transcripts"
+volume_dir = volume_subdir("transcripts")
 os.makedirs(volume_dir, exist_ok=True)
 
 for ticker in BDC_TICKERS:
@@ -73,9 +68,10 @@ print(f"\nTotal transcripts: {len(transcript_records)}")
 
 # COMMAND ----------
 
-target = uc_table("transcripts")
 transcripts_df = pd.DataFrame(transcript_records)
-sdf = spark.createDataFrame(transcripts_df).withColumn("ingested_at", current_timestamp())
-sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-print(f"Written {sdf.count()} rows to {target}")
+transcripts_df["ingested_at"] = pd.Timestamp.now().isoformat()
+
+metadata_path = f"{volume_dir}/transcripts_metadata.json"
+transcripts_df.to_json(metadata_path, orient="records", indent=2)
+print(f"Written {len(transcripts_df)} metadata rows to {metadata_path}")
 print(f"Raw text files saved to: {volume_dir}")

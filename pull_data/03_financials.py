@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest income statements, balance sheets, and cash flow statements.
-# Targets: uc.wealth.income_statements, uc.wealth.balance_sheets, uc.wealth.cash_flows
+# Pull income statements, balance sheets, and cash flow statements.
+# Output: UC_VOLUME_PATH/financials/{income_statements,balance_sheets,cash_flows}.json
 # FMP Sources: F3/F4/F5
 
 # COMMAND ----------
@@ -19,11 +19,9 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
@@ -70,12 +68,15 @@ cashflow_df = fetch_for_all(
 
 # COMMAND ----------
 
-for df, table_name in [
-    (income_df,  "income_statements"),
-    (balance_df, "balance_sheets"),
+out_dir = volume_subdir("financials")
+os.makedirs(out_dir, exist_ok=True)
+
+for df, filename in [
+    (income_df,   "income_statements"),
+    (balance_df,  "balance_sheets"),
     (cashflow_df, "cash_flows"),
 ]:
-    target = uc_table(table_name)
-    sdf = spark.createDataFrame(df).withColumn("ingested_at", current_timestamp())
-    sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-    print(f"Written {sdf.count()} rows to {target}")
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    out_path = f"{out_dir}/{filename}.json"
+    df.to_json(out_path, orient="records", indent=2)
+    print(f"Written {len(df)} rows to {out_path}")

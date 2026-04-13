@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest FMP company profiles for all tickers in the watchlist.
-# Target: uc.wealth.company_profiles
+# Pull FMP company profiles for all tickers in the watchlist.
+# Output: UC_VOLUME_PATH/company_profiles/company_profiles.json
 # FMP Source: F1 — /stable/profile
 
 # COMMAND ----------
@@ -19,28 +19,25 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
 
-# Fetch profiles for all tickers (batched in a single request)
 print(f"Fetching profiles for {len(EQUITY_TICKERS)} tickers...")
 raw = client.get_profiles(EQUITY_TICKERS)
 
 df = pd.DataFrame(raw) if isinstance(raw, list) else pd.DataFrame([raw])
+df["ingested_at"] = pd.Timestamp.now().isoformat()
 print(f"  Received {len(df)} records")
 
 # COMMAND ----------
 
-# Write to Unity Catalog
-target = uc_table("company_profiles")
+out_dir = volume_subdir("company_profiles")
+os.makedirs(out_dir, exist_ok=True)
+out_path = f"{out_dir}/company_profiles.json"
 
-sdf = spark.createDataFrame(df).withColumn("ingested_at", current_timestamp())
-sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-
-print(f"Written {sdf.count()} rows to {target}")
+df.to_json(out_path, orient="records", indent=2)
+print(f"Written {len(df)} records to {out_path}")

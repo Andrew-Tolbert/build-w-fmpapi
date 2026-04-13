@@ -1,8 +1,8 @@
 # Databricks notebook source
 # COMMAND ----------
 
-# Ingest historical daily price data for all watchlist tickers.
-# Target: uc.wealth.historical_prices
+# Pull historical daily price data for all watchlist tickers.
+# Output: UC_VOLUME_PATH/historical_prices/historical_prices.json
 # FMP Source: F2 — /stable/historical-price-eod/{symbol}
 
 # COMMAND ----------
@@ -19,16 +19,13 @@
 
 # COMMAND ----------
 
+import os
 import pandas as pd
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import current_timestamp, lit
 
-spark = SparkSession.builder.getOrCreate()
 client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
 
-# Parameters — override with Databricks widgets if needed
 from_date = HISTORY_START_DATE
 to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
 
@@ -49,13 +46,14 @@ for ticker in EQUITY_TICKERS:
         print(f"  {ticker}: ERROR — {e}")
 
 combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
+combined["ingested_at"] = pd.Timestamp.now().isoformat()
 print(f"\nTotal rows: {len(combined)}")
 
 # COMMAND ----------
 
-target = uc_table("historical_prices")
+out_dir = volume_subdir("historical_prices")
+os.makedirs(out_dir, exist_ok=True)
+out_path = f"{out_dir}/historical_prices.json"
 
-sdf = spark.createDataFrame(combined).withColumn("ingested_at", current_timestamp())
-sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-
-print(f"Written {sdf.count()} rows to {target}")
+combined.to_json(out_path, orient="records", indent=2)
+print(f"Written {len(combined)} rows to {out_path}")
