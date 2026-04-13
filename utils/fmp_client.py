@@ -58,8 +58,8 @@ class FMPClient:
     # ------------------------------------------------------------------
 
     def get_historical_prices(self, symbol: str, from_date: str, to_date: str) -> list[dict]:
-        data = self.get(f"{self._stable}/historical-price-eod/{symbol}",
-                        {"from": from_date, "to": to_date})
+        data = self.get(f"{self._stable}/historical-price-eod/dividend-adjusted",
+                        {"symbol": symbol, "from": from_date, "to": to_date})
         return data.get("historical", data) if isinstance(data, dict) else data
 
     # ------------------------------------------------------------------

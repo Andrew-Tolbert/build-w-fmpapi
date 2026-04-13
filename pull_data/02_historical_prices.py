@@ -3,7 +3,7 @@
 
 # Pull historical daily price data for all watchlist tickers.
 # Output: UC_VOLUME_PATH/historical_prices/historical_prices.json
-# FMP Source: F2 — /stable/historical-price-eod/{symbol}
+# FMP Source: F2 — /stable/historical-price-eod/dividend-adjusted?symbol=...
 
 # COMMAND ----------
 
