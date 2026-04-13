@@ -1,15 +1,13 @@
 # Databricks notebook source
-# COMMAND ----------
-
 # Central configuration for the GS AWM demo ingestion pipeline.
 # All notebooks %run this file to get shared symbols, paths, and constants.
 
 # COMMAND ----------
 
 # Unity Catalog paths
-UC_CATALOG     = "uc"
-UC_SCHEMA      = "wealth"
-UC_VOLUME_PATH = f"/Volumes/{UC_CATALOG}/{UC_SCHEMA}/documents"
+UC_CATALOG     = "ahtsa"
+UC_SCHEMA      = "awm"
+UC_VOLUME_PATH = f"/Volumes/{UC_CATALOG}/{UC_SCHEMA}/raw_fmapi"
 
 def volume_subdir(name):
     """Return path to a named subdirectory within the UC Volume."""
