@@ -9,7 +9,6 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install python-dotenv
 
 # COMMAND ----------
 

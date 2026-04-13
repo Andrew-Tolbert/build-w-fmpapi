@@ -9,7 +9,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install requests python-dotenv
+# MAGIC %pip install requests
 
 # COMMAND ----------
 

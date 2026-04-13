@@ -7,7 +7,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install faker python-dotenv
+# MAGIC %pip install faker
 
 # COMMAND ----------
 
