@@ -3,7 +3,7 @@
 
 # Pull SEC filing metadata and download raw filing documents to UC Volume.
 # Focuses on BDC anchor tickers (AINV, OCSL) for covenant analysis.
-# Output: UC_VOLUME_PATH/sec_filings/metadata.json + raw .htm files
+# Output: UC_VOLUME_PATH/sec_filings/{TICKER}/metadata.json + raw .htm files
 # FMP Sources: F8/D1 — /stable/sec-filings
 
 # COMMAND ----------
@@ -34,55 +34,50 @@ FILING_LIMIT  = 10  # most recent N per type per ticker
 
 # COMMAND ----------
 
-all_metadata = []
+out_base = volume_subdir("sec_filings")
 
 for ticker in BDC_TICKERS:
+    ticker_dir = f"{out_base}/{ticker}"
+    os.makedirs(ticker_dir, exist_ok=True)
+
+    ticker_metadata = []
     for ftype in FILING_TYPES:
         try:
             rows = client.get_sec_filings(ticker, filing_type=ftype, limit=FILING_LIMIT)
-            df = pd.DataFrame(rows)
-            df["requested_type"] = ftype
-            all_metadata.append(df)
-            print(f"  {ticker} {ftype}: {len(df)} filings")
+            for row in rows:
+                row["requested_type"] = ftype
+            ticker_metadata.extend(rows)
+            print(f"  {ticker} {ftype}: {len(rows)} filings")
         except Exception as e:
             print(f"  {ticker} {ftype}: ERROR — {e}")
 
-metadata_df = pd.concat(all_metadata, ignore_index=True) if all_metadata else pd.DataFrame()
-metadata_df["ingested_at"] = pd.Timestamp.now().isoformat()
-print(f"\nTotal filing metadata rows: {len(metadata_df)}")
+    if ticker_metadata:
+        metadata_df = pd.DataFrame(ticker_metadata)
+        metadata_df["ingested_at"] = pd.Timestamp.now().isoformat()
+        metadata_df.to_json(f"{ticker_dir}/metadata.json", orient="records", indent=2)
+        print(f"  {ticker}: written {len(metadata_df)} metadata rows")
 
-# COMMAND ----------
+        downloaded = 0
+        for row in ticker_metadata:
+            final_link = row.get("finalLink") or row.get("link")
+            if not final_link:
+                continue
+            ftype    = row.get("type", "UNKNOWN")
+            date_str = str(row.get("fillingDate", ""))[:10]
+            filename = f"{ftype}_{date_str}.htm".replace("/", "-")
+            dest     = os.path.join(ticker_dir, filename)
 
-volume_dir = volume_subdir("sec_filings")
-os.makedirs(volume_dir, exist_ok=True)
+            if os.path.exists(dest):
+                print(f"  Skipping (exists): {filename}")
+                continue
+            try:
+                resp = requests.get(final_link, timeout=30)
+                resp.raise_for_status()
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(resp.text)
+                downloaded += 1
+                print(f"  Downloaded: {filename}")
+            except Exception as e:
+                print(f"  Failed to download {filename}: {e}")
 
-# Write metadata as JSON
-metadata_path = f"{volume_dir}/metadata.json"
-metadata_df.to_json(metadata_path, orient="records", indent=2)
-print(f"Written {len(metadata_df)} metadata rows to {metadata_path}")
-
-downloaded = 0
-for _, row in metadata_df.iterrows():
-    final_link = row.get("finalLink") or row.get("link")
-    if not final_link:
-        continue
-    ticker   = row.get("symbol", "UNKNOWN")
-    ftype    = row.get("type", "UNKNOWN")
-    date_str = str(row.get("fillingDate", ""))[:10]
-    filename = f"{ticker}_{ftype}_{date_str}.htm".replace("/", "-")
-    dest     = os.path.join(volume_dir, filename)
-
-    if os.path.exists(dest):
-        print(f"  Skipping (exists): {filename}")
-        continue
-    try:
-        resp = requests.get(final_link, timeout=30)
-        resp.raise_for_status()
-        with open(dest, "w", encoding="utf-8") as f:
-            f.write(resp.text)
-        downloaded += 1
-        print(f"  Downloaded: {filename}")
-    except Exception as e:
-        print(f"  Failed to download {filename}: {e}")
-
-print(f"\nDownloaded {downloaded} new filing documents to {volume_dir}")
+        print(f"  {ticker}: {downloaded} new filing documents downloaded")

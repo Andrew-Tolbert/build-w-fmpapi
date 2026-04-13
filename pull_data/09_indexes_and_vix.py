@@ -2,7 +2,7 @@
 # COMMAND ----------
 
 # Pull index quotes, historical index prices, VIX, and index constituents.
-# Output: UC_VOLUME_PATH/indexes/{index_quotes,index_history,index_constituents}.json
+# Output: UC_VOLUME_PATH/indexes/{SYMBOL}/{quote,history,constituents}.json
 # FMP Sources: F16/F17/F18/F19
 # Symbols: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (Nasdaq), ^VIX
 
@@ -26,55 +26,63 @@ import pandas as pd
 client = FMPClient(api_key=FMP_API_KEY)
 
 ALL_INDEX_SYMBOLS = INDEX_SYMBOLS + [VIX_SYMBOL]  # ^GSPC, ^DJI, ^IXIC, ^VIX
+out_base = volume_subdir("indexes")
+
+def clean_symbol(s):
+    """Strip ^ for use as a directory name (e.g. ^GSPC → GSPC)."""
+    return s.lstrip("^")
 
 # COMMAND ----------
 
-# --- F16/F18: Real-time index + VIX quotes ---
+# --- F16/F18: Real-time index + VIX quotes — write one file per symbol ---
 print("Fetching index + VIX quotes...")
 quotes = client.get_index_quote(ALL_INDEX_SYMBOLS)
-quotes_df = pd.DataFrame(quotes)
-print(f"  {len(quotes_df)} index records")
+quotes_by_symbol = {q["symbol"]: q for q in quotes} if quotes else {}
+
+for symbol in ALL_INDEX_SYMBOLS:
+    sym_dir = f"{out_base}/{clean_symbol(symbol)}"
+    os.makedirs(sym_dir, exist_ok=True)
+    record = quotes_by_symbol.get(symbol, {})
+    df = pd.DataFrame([record] if record else [])
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    df.to_json(f"{sym_dir}/quote.json", orient="records", indent=2)
+    print(f"  {symbol}: quote written")
 
 # COMMAND ----------
 
-# --- F17/F18: Historical prices for all four symbols ---
+# --- F17/F18: Historical prices per symbol ---
 from_date = HISTORY_START_DATE
 to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
 
-hist_frames = []
 for symbol in ALL_INDEX_SYMBOLS:
     try:
         rows = client.get_index_historical(symbol, from_date, to_date)
         df = pd.DataFrame(rows)
         df["symbol"] = symbol
-        hist_frames.append(df)
+        df["ingested_at"] = pd.Timestamp.now().isoformat()
+        sym_dir = f"{out_base}/{clean_symbol(symbol)}"
+        os.makedirs(sym_dir, exist_ok=True)
+        df.to_json(f"{sym_dir}/history.json", orient="records", indent=2)
         print(f"  {symbol}: {len(df)} days")
     except Exception as e:
         print(f"  {symbol}: ERROR — {e}")
 
-hist_df = pd.concat(hist_frames, ignore_index=True) if hist_frames else pd.DataFrame()
-
 # COMMAND ----------
 
-# --- F19: Index constituents (S&P 500, Nasdaq 100, Dow Jones) ---
+# --- F19: Index constituents — one file per index ---
 print("\nFetching index constituents...")
-sp500    = pd.DataFrame(client.get_sp500_constituents());    sp500["index"]   = "SP500"
-nasdaq   = pd.DataFrame(client.get_nasdaq_constituents());   nasdaq["index"]  = "NASDAQ100"
-dowjones = pd.DataFrame(client.get_dowjones_constituents()); dowjones["index"] = "DJIA"
-constituents_df = pd.concat([sp500, nasdaq, dowjones], ignore_index=True)
-print(f"  Total constituents: {len(constituents_df)}")
-
-# COMMAND ----------
-
-out_dir = volume_subdir("indexes")
-os.makedirs(out_dir, exist_ok=True)
-
-for df, filename in [
-    (quotes_df,       "index_quotes"),
-    (hist_df,         "index_history"),
-    (constituents_df, "index_constituents"),
+for fetch_fn, index_name in [
+    (client.get_sp500_constituents,    "SP500"),
+    (client.get_nasdaq_constituents,   "NASDAQ100"),
+    (client.get_dowjones_constituents, "DJIA"),
 ]:
-    df["ingested_at"] = pd.Timestamp.now().isoformat()
-    out_path = f"{out_dir}/{filename}.json"
-    df.to_json(out_path, orient="records", indent=2)
-    print(f"Written {len(df)} rows to {out_path}")
+    try:
+        df = pd.DataFrame(fetch_fn())
+        df["index"] = index_name
+        df["ingested_at"] = pd.Timestamp.now().isoformat()
+        idx_dir = f"{out_base}/{index_name}"
+        os.makedirs(idx_dir, exist_ok=True)
+        df.to_json(f"{idx_dir}/constituents.json", orient="records", indent=2)
+        print(f"  {index_name}: {len(df)} constituents")
+    except Exception as e:
+        print(f"  {index_name}: ERROR — {e}")

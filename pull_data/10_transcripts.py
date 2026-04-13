@@ -2,7 +2,7 @@
 # COMMAND ----------
 
 # Pull earnings call transcripts for BDC anchor tickers (AINV, OCSL).
-# Output: UC_VOLUME_PATH/transcripts/transcripts_metadata.json + raw .txt files
+# Output: UC_VOLUME_PATH/transcripts/{TICKER}/metadata.json + raw .txt files
 # FMP Source: D3 — /stable/earning-call-transcript
 
 # COMMAND ----------
@@ -20,6 +20,7 @@
 # COMMAND ----------
 
 import os
+import datetime
 import pandas as pd
 
 client = FMPClient(api_key=FMP_API_KEY)
@@ -27,7 +28,6 @@ client = FMPClient(api_key=FMP_API_KEY)
 # COMMAND ----------
 
 # Fetch last 4 quarters for each BDC ticker (2 years of transcripts)
-import datetime
 current_year = datetime.date.today().year
 QUARTERS_TO_FETCH = [
     (current_year,     1), (current_year,     2), (current_year,     3), (current_year,     4),
@@ -36,11 +36,13 @@ QUARTERS_TO_FETCH = [
 
 # COMMAND ----------
 
-transcript_records = []
-volume_dir = volume_subdir("transcripts")
-os.makedirs(volume_dir, exist_ok=True)
+out_base = volume_subdir("transcripts")
 
 for ticker in BDC_TICKERS:
+    ticker_dir = f"{out_base}/{ticker}"
+    os.makedirs(ticker_dir, exist_ok=True)
+
+    transcript_records = []
     for year, quarter in QUARTERS_TO_FETCH:
         try:
             data = client.get_transcript(ticker, year=year, quarter=quarter)
@@ -56,22 +58,14 @@ for ticker in BDC_TICKERS:
                 "date":    record.get("date"),
                 "content": record.get("content", ""),
             })
-            # Save raw text to Volume for vector indexing
-            filename = f"{ticker}_Q{quarter}_{year}.txt"
-            with open(os.path.join(volume_dir, filename), "w", encoding="utf-8") as f:
+            filename = f"Q{quarter}_{year}.txt"
+            with open(os.path.join(ticker_dir, filename), "w", encoding="utf-8") as f:
                 f.write(record.get("content", ""))
             print(f"  {ticker} Q{quarter} {year}: saved")
         except Exception as e:
             print(f"  {ticker} Q{quarter} {year}: {e}")
 
-print(f"\nTotal transcripts: {len(transcript_records)}")
-
-# COMMAND ----------
-
-transcripts_df = pd.DataFrame(transcript_records)
-transcripts_df["ingested_at"] = pd.Timestamp.now().isoformat()
-
-metadata_path = f"{volume_dir}/transcripts_metadata.json"
-transcripts_df.to_json(metadata_path, orient="records", indent=2)
-print(f"Written {len(transcripts_df)} metadata rows to {metadata_path}")
-print(f"Raw text files saved to: {volume_dir}")
+    df = pd.DataFrame(transcript_records)
+    df["ingested_at"] = pd.Timestamp.now().isoformat()
+    df.to_json(f"{ticker_dir}/metadata.json", orient="records", indent=2)
+    print(f"  {ticker}: {len(df)} transcripts written to {ticker_dir}")

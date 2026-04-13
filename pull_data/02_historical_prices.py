@@ -2,7 +2,7 @@
 # COMMAND ----------
 
 # Pull historical daily price data for all watchlist tickers.
-# Output: UC_VOLUME_PATH/historical_prices/historical_prices.json
+# Output: UC_VOLUME_PATH/historical_prices/{TICKER}/prices.json
 # FMP Source: F2 — /stable/historical-price-eod/dividend-adjusted?symbol=...
 
 # COMMAND ----------
@@ -34,26 +34,17 @@ print(f"Fetching price history for {len(EQUITY_TICKERS)} tickers...")
 
 # COMMAND ----------
 
-all_frames = []
+out_base = volume_subdir("historical_prices")
+
 for ticker in EQUITY_TICKERS:
     try:
         rows = client.get_historical_prices(ticker, from_date, to_date)
         df = pd.DataFrame(rows)
         df["symbol"] = ticker
-        all_frames.append(df)
+        df["ingested_at"] = pd.Timestamp.now().isoformat()
+        ticker_dir = f"{out_base}/{ticker}"
+        os.makedirs(ticker_dir, exist_ok=True)
+        df.to_json(f"{ticker_dir}/prices.json", orient="records", indent=2)
         print(f"  {ticker}: {len(df)} rows")
     except Exception as e:
         print(f"  {ticker}: ERROR — {e}")
-
-combined = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
-combined["ingested_at"] = pd.Timestamp.now().isoformat()
-print(f"\nTotal rows: {len(combined)}")
-
-# COMMAND ----------
-
-out_dir = volume_subdir("historical_prices")
-os.makedirs(out_dir, exist_ok=True)
-out_path = f"{out_dir}/historical_prices.json"
-
-combined.to_json(out_path, orient="records", indent=2)
-print(f"Written {len(combined)} rows to {out_path}")
