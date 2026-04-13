@@ -3,11 +3,11 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # dependencies = [
-#   "requests",
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
 # ]
 # ///
 # Pull FMP company profiles for all tickers in the watchlist.
-# Output: UC_VOLUME_PATH/company_profiles/{TICKER}/profile.json
+# Output: UC_VOLUME_PATH/company_profiles/{TICKER}/{ts}_profile.json
 # FMP Source: F1 — /stable/profile
 
 # COMMAND ----------
@@ -24,18 +24,21 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta
 
-
 client = FMPClient(api_key=FMP_API_KEY)
+
+# Uncomment to wipe all data for this feed before re-ingesting:
+# clear_directory(volume_subdir("company_profiles"))
 
 # COMMAND ----------
 
 out_base = volume_subdir("company_profiles")
+_ts = ts_prefix()
 print(f"Fetching profiles for {len(EQUITY_TICKERS)} tickers...")
 
 for ticker in EQUITY_TICKERS:
     try:
         ticker_dir = f"{out_base}/{ticker}"
-        profile_path = f"{ticker_dir}/profile.json"
+        profile_path = f"{ticker_dir}/{_ts}_profile.json"
         exists_and_recent = False
         try:
             mod_time = dbutils.fs.ls(ticker_dir)[0].modificationTime / 1000

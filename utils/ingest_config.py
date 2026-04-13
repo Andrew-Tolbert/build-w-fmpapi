@@ -4,6 +4,8 @@
 
 # COMMAND ----------
 
+import datetime
+
 # Unity Catalog paths
 UC_CATALOG     = "ahtsa"
 UC_SCHEMA      = "awm"
@@ -13,6 +15,18 @@ UC_VOLUME_PATH = f"/Volumes/{UC_CATALOG}/{UC_SCHEMA}/raw_fmapi"
 def volume_subdir(name):
     """Return path to a named subdirectory within the UC Volume."""
     return f"{UC_VOLUME_PATH}/{name}"
+
+def ts_prefix():
+    """Return a timestamp prefix for output filenames: YYYY_MM_DD_HH"""
+    return datetime.datetime.now().strftime("%Y_%m_%d_%H")
+
+def clear_directory(path):
+    """Remove all files and subdirectories under path via dbutils."""
+    try:
+        dbutils.fs.rm(path, recurse=True)
+        print(f"Cleared: {path}")
+    except Exception as e:
+        print(f"Could not clear {path}: {e}")
 
 # COMMAND ----------
 

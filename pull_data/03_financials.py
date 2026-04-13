@@ -7,7 +7,7 @@
 # ]
 # ///
 # Pull income statements, balance sheets, and cash flow statements.
-# Output: UC_VOLUME_PATH/financials/{TICKER}/{income_statements,balance_sheets,cash_flows}.json
+# Output: UC_VOLUME_PATH/financials/{TICKER}/{ts}_{income_statements,balance_sheets,cash_flows}.json
 # FMP Sources: F3/F4/F5
 
 # COMMAND ----------
@@ -25,9 +25,13 @@ import pandas as pd
 
 client = FMPClient(api_key=FMP_API_KEY)
 
+# Uncomment to wipe all data for this feed before re-ingesting:
+# clear_directory(volume_subdir("financials"))
+
 # COMMAND ----------
 
 out_base = volume_subdir("financials")
+_ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
@@ -47,7 +51,7 @@ for ticker in EQUITY_TICKERS:
             df = pd.DataFrame(data)
             df["symbol"] = ticker
             df["ingested_at"] = ingested_at
-            df.to_json(f"{ticker_dir}/{filename}.json", orient="records", indent=2)
+            df.to_json(f"{ticker_dir}/{_ts}_{filename}.json", orient="records", indent=2)
 
         print(f"  {ticker}: {len(income)} income, {len(balance)} balance, {len(cashflow)} cashflow rows")
     except Exception as e:

@@ -1,13 +1,14 @@
 # Databricks notebook source
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+# ]
+# ///
 # Pull earnings call transcripts for BDC anchor tickers (AINV, OCSL).
-# Output: UC_VOLUME_PATH/transcripts/{TICKER}/metadata.json + raw .txt files
+# Output: UC_VOLUME_PATH/transcripts/{TICKER}/{ts}_metadata.json + {ts}_Q{q}_{y}.txt
 # FMP Source: D3 — /stable/earning-call-transcript
-
-# COMMAND ----------
-
-# MAGIC %pip install requests
 
 # COMMAND ----------
 
@@ -25,6 +26,9 @@ import pandas as pd
 
 client = FMPClient(api_key=FMP_API_KEY)
 
+# Uncomment to wipe all data for this feed before re-ingesting:
+# clear_directory(volume_subdir("transcripts"))
+
 # COMMAND ----------
 
 # Fetch last 4 quarters for each BDC ticker (2 years of transcripts)
@@ -37,6 +41,7 @@ QUARTERS_TO_FETCH = [
 # COMMAND ----------
 
 out_base = volume_subdir("transcripts")
+_ts = ts_prefix()
 
 for ticker in BDC_TICKERS:
     ticker_dir = f"{out_base}/{ticker}"
@@ -58,7 +63,7 @@ for ticker in BDC_TICKERS:
                 "date":    record.get("date"),
                 "content": record.get("content", ""),
             })
-            filename = f"Q{quarter}_{year}.txt"
+            filename = f"{_ts}_Q{quarter}_{year}.txt"
             with open(os.path.join(ticker_dir, filename), "w", encoding="utf-8") as f:
                 f.write(record.get("content", ""))
             print(f"  {ticker} Q{quarter} {year}: saved")
@@ -67,5 +72,5 @@ for ticker in BDC_TICKERS:
 
     df = pd.DataFrame(transcript_records)
     df["ingested_at"] = pd.Timestamp.now().isoformat()
-    df.to_json(f"{ticker_dir}/metadata.json", orient="records", indent=2)
+    df.to_json(f"{ticker_dir}/{_ts}_metadata.json", orient="records", indent=2)
     print(f"  {ticker}: {len(df)} transcripts written to {ticker_dir}")

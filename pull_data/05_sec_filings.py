@@ -1,14 +1,15 @@
 # Databricks notebook source
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+# ]
+# ///
 # Pull SEC filing metadata and download raw filing documents to UC Volume.
 # Focuses on BDC anchor tickers (AINV, OCSL) for covenant analysis.
-# Output: UC_VOLUME_PATH/sec_filings/{TICKER}/metadata.json + raw .htm files
+# Output: UC_VOLUME_PATH/sec_filings/{TICKER}/{ts}_metadata.json + {ts}_{type}_{date}.htm
 # FMP Sources: F8/D1 — /stable/sec-filings
-
-# COMMAND ----------
-
-# MAGIC %pip install requests
 
 # COMMAND ----------
 
@@ -26,6 +27,9 @@ import requests
 
 client = FMPClient(api_key=FMP_API_KEY)
 
+# Uncomment to wipe all data for this feed before re-ingesting:
+# clear_directory(volume_subdir("sec_filings"))
+
 # COMMAND ----------
 
 # Filing types to ingest — 10-Q and 8-K for covenant analysis; also 10-K annual
@@ -35,6 +39,7 @@ FILING_LIMIT  = 10  # most recent N per type per ticker
 # COMMAND ----------
 
 out_base = volume_subdir("sec_filings")
+_ts = ts_prefix()
 
 for ticker in BDC_TICKERS:
     ticker_dir = f"{out_base}/{ticker}"
@@ -54,7 +59,7 @@ for ticker in BDC_TICKERS:
     if ticker_metadata:
         metadata_df = pd.DataFrame(ticker_metadata)
         metadata_df["ingested_at"] = pd.Timestamp.now().isoformat()
-        metadata_df.to_json(f"{ticker_dir}/metadata.json", orient="records", indent=2)
+        metadata_df.to_json(f"{ticker_dir}/{_ts}_metadata.json", orient="records", indent=2)
         print(f"  {ticker}: written {len(metadata_df)} metadata rows")
 
         downloaded = 0
@@ -64,7 +69,7 @@ for ticker in BDC_TICKERS:
                 continue
             ftype    = row.get("type", "UNKNOWN")
             date_str = str(row.get("fillingDate", ""))[:10]
-            filename = f"{ftype}_{date_str}.htm".replace("/", "-")
+            filename = f"{_ts}_{ftype}_{date_str}.htm".replace("/", "-")
             dest     = os.path.join(ticker_dir, filename)
 
             if os.path.exists(dest):

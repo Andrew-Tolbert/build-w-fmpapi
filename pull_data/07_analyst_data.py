@@ -1,13 +1,14 @@
 # Databricks notebook source
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+# ]
+# ///
 # Pull analyst estimates, price target consensus, and analyst ratings.
-# Output: UC_VOLUME_PATH/analyst_data/{TICKER}/{analyst_estimates,price_targets,analyst_ratings}.json
+# Output: UC_VOLUME_PATH/analyst_data/{TICKER}/{ts}_{analyst_estimates,price_targets,analyst_ratings}.json
 # FMP Sources: F12/F13/F14
-
-# COMMAND ----------
-
-# MAGIC %pip install requests
 
 # COMMAND ----------
 
@@ -24,9 +25,13 @@ import pandas as pd
 
 client = FMPClient(api_key=FMP_API_KEY)
 
+# Uncomment to wipe all data for this feed before re-ingesting:
+# clear_directory(volume_subdir("analyst_data"))
+
 # COMMAND ----------
 
 out_base = volume_subdir("analyst_data")
+_ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
@@ -40,15 +45,15 @@ for ticker in EQUITY_TICKERS:
 
         edf = pd.DataFrame(est)
         edf["symbol"] = ticker; edf["ingested_at"] = ingested_at
-        edf.to_json(f"{ticker_dir}/analyst_estimates.json", orient="records", indent=2)
+        edf.to_json(f"{ticker_dir}/{_ts}_analyst_estimates.json", orient="records", indent=2)
 
         tdf = pd.DataFrame([pt] if isinstance(pt, dict) else pt)
         tdf["symbol"] = ticker; tdf["ingested_at"] = ingested_at
-        tdf.to_json(f"{ticker_dir}/price_targets.json", orient="records", indent=2)
+        tdf.to_json(f"{ticker_dir}/{_ts}_price_targets.json", orient="records", indent=2)
 
         gdf = pd.DataFrame([gr] if isinstance(gr, dict) else gr)
         gdf["symbol"] = ticker; gdf["ingested_at"] = ingested_at
-        gdf.to_json(f"{ticker_dir}/analyst_ratings.json", orient="records", indent=2)
+        gdf.to_json(f"{ticker_dir}/{_ts}_analyst_ratings.json", orient="records", indent=2)
 
         print(f"  {ticker}: {len(edf)} estimate rows")
     except Exception as e:
