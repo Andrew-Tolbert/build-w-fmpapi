@@ -26,7 +26,7 @@ import pandas as pd
 client = FMPClient(api_key=FMP_API_KEY)
 
 # Uncomment to wipe all data for this feed before re-ingesting:
-# clear_directory(volume_subdir("analyst_data"))
+clear_directory(volume_subdir("analyst_data"))
 
 # COMMAND ----------
 
@@ -35,7 +35,7 @@ _ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
-        est = client.get_analyst_estimates(ticker, limit=8)
+        est = client.get_analyst_estimates(ticker, period="quarterly",limit=8)
         pt  = client.get_price_target_consensus(ticker)
         gr  = client.get_grades_summary(ticker)
 

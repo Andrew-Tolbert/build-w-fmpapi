@@ -26,7 +26,7 @@ import pandas as pd
 client = FMPClient(api_key=FMP_API_KEY)
 
 # Uncomment to wipe all data for this feed before re-ingesting:
-# clear_directory(volume_subdir("financials"))
+clear_directory(volume_subdir("financials"))
 
 # COMMAND ----------
 
@@ -35,9 +35,9 @@ _ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
-        income   = client.get_income_statement(ticker, period="quarterly", limit=12)
-        balance  = client.get_balance_sheet(ticker, period="quarterly", limit=12)
-        cashflow = client.get_cash_flow(ticker, period="quarterly", limit=12)
+        income   = client.get_income_statement(ticker, period="quarterly", limit=24)
+        balance  = client.get_balance_sheet(ticker, period="quarterly", limit=24)
+        cashflow = client.get_cash_flow(ticker, period="quarterly", limit=24)
 
         ticker_dir = f"{out_base}/{ticker}"
         os.makedirs(ticker_dir, exist_ok=True)
@@ -56,3 +56,7 @@ for ticker in EQUITY_TICKERS:
         print(f"  {ticker}: {len(income)} income, {len(balance)} balance, {len(cashflow)} cashflow rows")
     except Exception as e:
         print(f"  {ticker}: ERROR — {e}")
+
+# COMMAND ----------
+
+display(dbutils.fs.ls(f"{out_base}/{ticker}"))

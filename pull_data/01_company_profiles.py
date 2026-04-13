@@ -22,7 +22,7 @@
 
 import os
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 client = FMPClient(api_key=FMP_API_KEY)
 
@@ -58,3 +58,7 @@ for ticker in EQUITY_TICKERS:
         print(f"  {ticker}: written")
     except Exception as e:
         print(f"  {ticker}: ERROR — {e}")
+
+# COMMAND ----------
+
+display(dbutils.fs.ls(f'{out_base}/{ticker}'))

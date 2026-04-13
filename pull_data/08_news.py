@@ -30,13 +30,16 @@ client = FMPClient(api_key=FMP_API_KEY)
 
 # COMMAND ----------
 
-NEWS_LIMIT = 50  # articles per ticker
+NEWS_LIMIT = 2  # articles per ticker
+from_date = HISTORY_START_DATE
+to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
+
 out_base = volume_subdir("stock_news")
 _ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
-        rows = client.get_stock_news(ticker, limit=NEWS_LIMIT)
+        rows = client.get_stock_news(ticker, from_date = from_date, to_date = to_date, limit=NEWS_LIMIT)
         df = pd.DataFrame(rows)
         df["symbol"] = ticker
         df["ingested_at"] = pd.Timestamp.now().isoformat()

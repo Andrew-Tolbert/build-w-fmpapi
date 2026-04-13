@@ -36,8 +36,8 @@ _ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
-        metrics = client.get_key_metrics(ticker, period="quarterly", limit=12)
-        ratios  = client.get_ratios(ticker, period="quarterly", limit=12)
+        metrics = client.get_key_metrics(ticker, period="quarterly", limit=24)
+        ratios  = client.get_ratios(ticker, period="quarterly", limit=24)
 
         ticker_dir = f"{out_base}/{ticker}"
         os.makedirs(ticker_dir, exist_ok=True)

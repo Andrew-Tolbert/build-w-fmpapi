@@ -1,6 +1,4 @@
 # Databricks notebook source
-# COMMAND ----------
-
 # FMP API client — reusable wrapper for all Financial Modeling Prep endpoints.
 # Usage in other notebooks:
 #   %run ../utils/fmp_client
@@ -110,36 +108,36 @@ class FMPClient:
     # ------------------------------------------------------------------
 
     def get_etf_info(self, symbol: str) -> dict:
-        return self.get(f"{self._stable}/etf-info", {"symbol": symbol})
+        return self.get(f"{self._stable}/etf/info", {"symbol": symbol})
 
     def get_etf_holdings(self, symbol: str) -> list[dict]:
-        data = self.get(f"{self._stable}/etf-holdings", {"symbol": symbol})
+        data = self.get(f"{self._stable}/etf/holdings", {"symbol": symbol})
         return data.get("holdings", data) if isinstance(data, dict) else data
 
     def get_etf_sector_weightings(self, symbol: str) -> list[dict]:
-        return self.get(f"{self._stable}/etf-sector-weightings", {"symbol": symbol})
+        return self.get(f"{self._stable}/etf/sector-weightings", {"symbol": symbol})
 
     # ------------------------------------------------------------------
     # Analyst data
     # ------------------------------------------------------------------
 
-    def get_analyst_estimates(self, symbol: str, limit: int = 8) -> list[dict]:
+    def get_analyst_estimates(self, symbol: str, period: str = "annual" , limit: int = 24) -> list[dict]:
         return self.get(f"{self._stable}/analyst-estimates",
-                        {"symbol": symbol, "limit": limit})
+                        {"symbol": symbol, "period": period,"limit": limit})
 
     def get_price_target_consensus(self, symbol: str) -> dict:
         return self.get(f"{self._stable}/price-target-consensus", {"symbol": symbol})
 
     def get_grades_summary(self, symbol: str) -> dict:
-        return self.get(f"{self._stable}/grades-summary", {"symbol": symbol})
+        return self.get(f"{self._stable}/grades-consensus", {"symbol": symbol})
 
     # ------------------------------------------------------------------
     # News
     # ------------------------------------------------------------------
 
-    def get_stock_news(self, symbol: str, limit: int = 50) -> list[dict]:
-        return self.get(f"{self._stable}/stock-news",
-                        {"symbol": symbol, "limit": limit})
+    def get_stock_news(self, symbol: str,from_date: str, to_date: str, limit: int = 50) -> list[dict]:
+        return self.get(f"{self._stable}/news/stock",
+                        {"symbol": symbol, "from": from_date, "to": to_date, "limit": limit})
 
     # ------------------------------------------------------------------
     # Earnings transcripts
@@ -158,9 +156,8 @@ class FMPClient:
         return self.get(f"{self._v3}/quote/{joined}")
 
     def get_index_historical(self, symbol: str, from_date: str, to_date: str) -> list[dict]:
-        url_symbol = symbol.replace("^", "%5E")
-        data = self.get(f"{self._v3}/historical-price-full/{url_symbol}",
-                        {"from": from_date, "to": to_date})
+        data = self.get(f"{self._stable}/historical-price-eod/full",
+                        {"symbol": symbol,"from": from_date, "to": to_date})
         return data.get("historical", []) if isinstance(data, dict) else data
 
     def get_sp500_constituents(self) -> list[dict]:
