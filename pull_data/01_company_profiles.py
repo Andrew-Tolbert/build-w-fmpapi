@@ -1,17 +1,18 @@
 # Databricks notebook source
-# COMMAND ----------
-
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "requests",
+# ]
+# ///
 # Pull FMP company profiles for all tickers in the watchlist.
 # Output: UC_VOLUME_PATH/company_profiles/company_profiles.json
 # FMP Source: F1 — /stable/profile
 
 # COMMAND ----------
 
-# MAGIC %pip install requests
-
-# COMMAND ----------
-
-# MAGIC %run ../utils/config
+# MAGIC %run ../utils/ingest_config
 
 # COMMAND ----------
 

@@ -7,6 +7,7 @@
 # Unity Catalog paths
 UC_CATALOG     = "ahtsa"
 UC_SCHEMA      = "awm"
+SECRET_KEY   = "fmapi"
 UC_VOLUME_PATH = f"/Volumes/{UC_CATALOG}/{UC_SCHEMA}/raw_fmapi"
 
 def volume_subdir(name):
@@ -20,7 +21,9 @@ def volume_subdir(name):
 SECRET_SCOPE   = "awm-demo"
 SECRET_KEY_FMP = "fmp-api-key"
 
-FMP_API_KEY = dbutils.secrets.get(scope=SECRET_SCOPE, key=SECRET_KEY_FMP)  # noqa: F821
+# read a specific secret
+FMP_API_KEY= dbutils.secrets.get(catalog=UC_CATALOG , schema=UC_SCHEMA, key=SECRET_KEY)
+
 FMP_BASE_URL_STABLE = "https://financialmodelingprep.com/stable"
 FMP_BASE_URL_V3     = "https://financialmodelingprep.com/api/v3"
 
