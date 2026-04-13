@@ -29,10 +29,10 @@ client = FMPClient(api_key=FMP_API_KEY)
 
 print(f"Fetching profiles for {len(EQUITY_TICKERS)} tickers...")
 raw = client.get_profiles(EQUITY_TICKERS)
+print(f"  Received {len(raw)} records")
 
-df = pd.DataFrame(raw) if isinstance(raw, list) else pd.DataFrame([raw])
+df = pd.DataFrame(raw)
 df["ingested_at"] = pd.Timestamp.now().isoformat()
-print(f"  Received {len(df)} records")
 
 # COMMAND ----------
 

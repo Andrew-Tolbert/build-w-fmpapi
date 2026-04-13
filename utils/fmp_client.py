@@ -48,10 +48,17 @@ class FMPClient:
     # ------------------------------------------------------------------
 
     def get_profile(self, symbol: str) -> dict:
-        return self.get(f"{self._stable}/profile", {"symbol": symbol})
+        data = self.get(f"{self._stable}/profile", {"symbol": symbol})
+        return data[0] if isinstance(data, list) and data else data
 
     def get_profiles(self, symbols: list[str]) -> list[dict]:
-        return self.get(f"{self._stable}/profile", {"symbol": ",".join(symbols)})
+        results = []
+        for symbol in symbols:
+            try:
+                results.append(self.get_profile(symbol))
+            except Exception as e:
+                print(f"  {symbol}: ERROR — {e}")
+        return results
 
     # ------------------------------------------------------------------
     # Historical prices
