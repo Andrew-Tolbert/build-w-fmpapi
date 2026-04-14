@@ -6,9 +6,9 @@
 #   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
 # ]
 # ///
-# Pull income statements, balance sheets, cash flow statements, key metrics, and financial ratios.
-# Output: UC_VOLUME_PATH/financials/{TICKER}/{ts}_{income_statements,balance_sheets,cash_flows,key_metrics,ratios}.json
-# FMP Sources: F3/F4/F5/F6/F7
+# Pull income statements, balance sheets, and cash flow statements.
+# Output: UC_VOLUME_PATH/financials/{TICKER}/{ts}_{income_statements,balance_sheets,cash_flows}.json
+# FMP Sources: F3/F4/F5
 
 # COMMAND ----------
 
@@ -35,29 +35,25 @@ _ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
-        income      = client.get_income_statement(ticker, period="quarterly", limit=24)
-        balance     = client.get_balance_sheet(ticker, period="quarterly", limit=24)
-        cashflow    = client.get_cash_flow(ticker, period="quarterly", limit=24)
-        key_metrics = client.get_key_metrics(ticker, period="quarterly", limit=24)
-        ratios      = client.get_ratios(ticker, period="quarterly", limit=24)
+        income   = client.get_income_statement(ticker, period="quarterly", limit=24)
+        balance  = client.get_balance_sheet(ticker, period="quarterly", limit=24)
+        cashflow = client.get_cash_flow(ticker, period="quarterly", limit=24)
 
         ticker_dir = f"{out_base}/{ticker}"
         os.makedirs(ticker_dir, exist_ok=True)
         ingested_at = pd.Timestamp.now().isoformat()
 
         for data, filename in [
-            (income,      "income_statements"),
-            (balance,     "balance_sheets"),
-            (cashflow,    "cash_flows"),
-            (key_metrics, "key_metrics"),
-            (ratios,      "ratios"),
+            (income,   "income_statements"),
+            (balance,  "balance_sheets"),
+            (cashflow, "cash_flows"),
         ]:
             df = pd.DataFrame(data)
             df["symbol"] = ticker
             df["ingested_at"] = ingested_at
             df.to_json(f"{ticker_dir}/{_ts}_{filename}.json", orient="records", indent=2)
 
-        print(f"  {ticker}: {len(income)} income, {len(balance)} balance, {len(cashflow)} cashflow, {len(key_metrics)} key_metrics, {len(ratios)} ratios rows")
+        print(f"  {ticker}: {len(income)} income, {len(balance)} balance, {len(cashflow)} cashflow rows")
     except Exception as e:
         print(f"  {ticker}: ERROR — {e}")
 
