@@ -21,6 +21,10 @@
 
 # COMMAND ----------
 
+EQUITY_TICKERS
+
+# COMMAND ----------
+
 import os
 import pandas as pd
 import requests

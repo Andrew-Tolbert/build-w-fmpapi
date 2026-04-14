@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # Central configuration for the GS AWM demo ingestion pipeline.
 # All notebooks %run this file to get shared symbols, paths, and constants.
 
@@ -60,12 +64,11 @@ _EQUITY_TICKERS_SAMPLE = [
 ]
 
 _EQUITY_TICKERS_FULL = [
-    "AINV", "OCSL",     # BDCs
     "GS", "MS", "JPM",  # Financials
     "BX", "APO", "KKR", # Alt managers
     "SPY", "AGG",        # Benchmark ETFs
     "BKLN", "HYG",       # Credit ETFs
-]
+] + BDC_TICKERS
 
 _ETF_TICKERS_SAMPLE = ["SPY"]
 _ETF_TICKERS_FULL   = ["SPY", "AGG", "BKLN", "HYG", "QQQ", "IWM"]
