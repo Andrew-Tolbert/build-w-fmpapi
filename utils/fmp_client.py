@@ -83,6 +83,19 @@ class FMPClient:
         return self.get(f"{self._stable}/cash-flow-statement",
                         {"symbol": symbol, "period": period, "limit": limit})
 
+    # ------------------------------------------------------------------
+    # Financial reports (10-K / quarterly JSON)
+    # ------------------------------------------------------------------
+
+    def get_financial_report_dates(self, symbol: str) -> list[dict]:
+        """Return available report periods (year + period) for a symbol."""
+        return self.get(f"{self._stable}/financial-reports-dates", {"symbol": symbol})
+
+    def get_financial_report_json(self, symbol: str, year: str, period: str) -> dict:
+        """Download the full structured JSON report for a given symbol/year/period."""
+        return self.get(f"{self._stable}/financial-reports-json",
+                        {"symbol": symbol, "year": year, "period": period})
+
     def get_income_statement_growth(self, symbol: str, period: str = "annual", limit: int = 8) -> list[dict]:
         return self.get(f"{self._stable}/income-statement-growth",
                         {"symbol": symbol, "period": period, "limit": limit})
