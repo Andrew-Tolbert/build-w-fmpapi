@@ -111,9 +111,10 @@ class FMPClient:
     # SEC filings
     # ------------------------------------------------------------------
 
-    def get_sec_filings(self, symbol: str, filing_type: str = "10-Q", limit: int = 20) -> list[dict]:
-        return self.get(f"{self._stable}/sec-filings",
-                        {"symbol": symbol, "type": filing_type, "limit": limit})
+    def get_sec_filings(self, symbol: str, from_date: str, to_date: str) -> list[dict]:
+        """Fetch all SEC filings for a symbol in a date range. Filter by formType client-side."""
+        return self.get(f"{self._stable}/sec-filings-search/symbol",
+                        {"symbol": symbol, "from": from_date, "to": to_date})
 
     # ------------------------------------------------------------------
     # ETF data

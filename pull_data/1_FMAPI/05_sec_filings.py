@@ -9,7 +9,7 @@
 # Pull SEC filing metadata and download raw filing documents to UC Volume.
 # Focuses on BDC anchor tickers (AINV, OCSL) for covenant analysis.
 # Output: UC_VOLUME_PATH/sec_filings/{TICKER}/{ts}_metadata.json + {ts}_{type}_{date}.htm
-# FMP Sources: F8/D1 — /stable/sec-filings
+# FMP Sources: F8/D1 — /stable/sec-filings-search/symbol
 
 # COMMAND ----------
 
@@ -38,7 +38,9 @@ client = FMPClient(api_key=FMP_API_KEY)
 
 # Filing types to ingest — 10-Q and 8-K for covenant analysis; also 10-K annual
 FILING_TYPES = ["10-Q", "8-K", "10-K"]
-FILING_LIMIT  = 10  # most recent N per type per ticker
+
+# Date range — pull from history start through today
+TO_DATE = pd.Timestamp.now().strftime("%Y-%m-%d")
 
 # COMMAND ----------
 
@@ -50,15 +52,12 @@ for ticker in BDC_TICKERS:
     os.makedirs(ticker_dir, exist_ok=True)
 
     ticker_metadata = []
-    for ftype in FILING_TYPES:
-        try:
-            rows = client.get_sec_filings(ticker, filing_type=ftype, limit=FILING_LIMIT)
-            for row in rows:
-                row["requested_type"] = ftype
-            ticker_metadata.extend(rows)
-            print(f"  {ticker} {ftype}: {len(rows)} filings")
-        except Exception as e:
-            print(f"  {ticker} {ftype}: ERROR — {e}")
+    try:
+        all_filings = client.get_sec_filings(ticker, from_date=HISTORY_START_DATE, to_date=TO_DATE)
+        ticker_metadata = [f for f in all_filings if f.get("formType") in FILING_TYPES]
+        print(f"  {ticker}: {len(all_filings)} total filings, {len(ticker_metadata)} matching {FILING_TYPES}")
+    except Exception as e:
+        print(f"  {ticker}: ERROR — {e}")
 
     if ticker_metadata:
         metadata_df = pd.DataFrame(ticker_metadata)
@@ -71,8 +70,8 @@ for ticker in BDC_TICKERS:
             final_link = row.get("finalLink") or row.get("link")
             if not final_link:
                 continue
-            ftype    = row.get("type", "UNKNOWN")
-            date_str = str(row.get("fillingDate", ""))[:10]
+            ftype    = row.get("formType", "UNKNOWN")
+            date_str = str(row.get("filingDate", ""))[:10]
             filename = f"{_ts}_{ftype}_{date_str}.htm".replace("/", "-")
             dest     = os.path.join(ticker_dir, filename)
 
