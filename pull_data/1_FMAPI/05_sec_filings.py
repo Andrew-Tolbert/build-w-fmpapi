@@ -33,8 +33,9 @@ import pandas as pd
 
 client = FMPClient(api_key=FMP_API_KEY)
 
-# Uncomment to wipe all downloaded SEC filing files before re-ingesting:
-# clear_directory(volume_subdir("sec_filings"))
+# Uncomment to wipe all data for this feed before re-ingesting:
+#clear_directory(volume_subdir("sec_filings"))
+
 
 # COMMAND ----------
 
