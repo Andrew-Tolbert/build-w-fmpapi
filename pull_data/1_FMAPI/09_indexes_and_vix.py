@@ -13,11 +13,11 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../utils/ingest_config
+# MAGIC %run ../../utils/ingest_config
 
 # COMMAND ----------
 
-# MAGIC %run ../utils/fmp_client
+# MAGIC %run ../../utils/fmp_client
 
 # COMMAND ----------
 
