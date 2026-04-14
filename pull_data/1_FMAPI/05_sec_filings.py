@@ -34,7 +34,7 @@ import pandas as pd
 client = FMPClient(api_key=FMP_API_KEY)
 
 # Uncomment to wipe all data for this feed before re-ingesting:
-#clear_directory(volume_subdir("sec_filings"))
+clear_directory(volume_subdir("sec_filings"))
 
 
 # COMMAND ----------
@@ -46,6 +46,7 @@ _8K_TYPES    = {"8-K"}
 
 # Date range — pull from history start through today
 TO_DATE = pd.Timestamp.now().strftime("%Y-%m-%d")
+FROM_DATE = pd.Timestamp.now().replace(year=pd.Timestamp.now().year - 1, month=1, day=1).strftime("%Y-%m-%d")
 
 # COMMAND ----------
 
@@ -77,7 +78,7 @@ out_base = volume_subdir("sec_filings")
 
 for ticker in BDC_TICKERS:
     try:
-        all_filings = client.get_sec_filings(ticker, from_date=HISTORY_START_DATE, to_date=TO_DATE)
+        all_filings = client.get_sec_filings(ticker, from_date=FROM_DATE, to_date=TO_DATE)
         matching    = [f for f in all_filings if f.get("formType") in FILING_TYPES]
         print(f"  {ticker}: {len(all_filings)} total filings, {len(matching)} matching {FILING_TYPES}")
     except Exception as e:
