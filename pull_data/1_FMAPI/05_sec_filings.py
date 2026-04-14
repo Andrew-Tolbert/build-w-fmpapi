@@ -21,10 +21,6 @@
 
 # COMMAND ----------
 
-EQUITY_TICKERS
-
-# COMMAND ----------
-
 import os
 import pandas as pd
 import requests
@@ -89,3 +85,7 @@ for ticker in BDC_TICKERS:
                 print(f"  Failed to download {filename}: {e}")
 
         print(f"  {ticker}: {downloaded} new filing documents downloaded")
+
+# COMMAND ----------
+
+display(dbutils.fs.ls(ticker_dir))
