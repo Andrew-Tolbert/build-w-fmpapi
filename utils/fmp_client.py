@@ -83,6 +83,18 @@ class FMPClient:
         return self.get(f"{self._stable}/cash-flow-statement",
                         {"symbol": symbol, "period": period, "limit": limit})
 
+    def get_income_statement_growth(self, symbol: str, period: str = "annual", limit: int = 8) -> list[dict]:
+        return self.get(f"{self._stable}/income-statement-growth",
+                        {"symbol": symbol, "period": period, "limit": limit})
+
+    def get_balance_sheet_growth(self, symbol: str, period: str = "annual", limit: int = 8) -> list[dict]:
+        return self.get(f"{self._stable}/balance-sheet-statement-growth",
+                        {"symbol": symbol, "period": period, "limit": limit})
+
+    def get_cash_flow_growth(self, symbol: str, period: str = "annual", limit: int = 8) -> list[dict]:
+        return self.get(f"{self._stable}/cash-flow-statement-growth",
+                        {"symbol": symbol, "period": period, "limit": limit})
+
     # ------------------------------------------------------------------
     # Metrics & ratios
     # ------------------------------------------------------------------
