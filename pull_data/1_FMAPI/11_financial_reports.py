@@ -53,7 +53,14 @@ out_base = volume_subdir("financial_reports")
 for ticker in EQUITY_TICKERS:
     try:
         dates = client.get_financial_report_dates(ticker)
-        print(f"  {ticker}: {len(dates)} available report periods")
+        # Sort by fiscal year desc, then period desc (Q4 > Q3 > Q2 > Q1 > FY), take most recent 5
+        period_order = {"Q4": 4, "Q3": 3, "Q2": 2, "Q1": 1, "FY": 0}
+        dates = sorted(
+            dates,
+            key=lambda x: (int(x.get("fiscalYear", 0)), period_order.get(x.get("period", ""), -1)),
+            reverse=True
+        )[:5]
+        print(f"  {ticker}: {len(dates)} report periods (most recent 5)")
     except Exception as e:
         print(f"  {ticker}: ERROR fetching report dates — {e}")
         continue
