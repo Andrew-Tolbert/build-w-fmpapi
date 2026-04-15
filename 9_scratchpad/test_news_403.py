@@ -79,12 +79,92 @@ def strategy_browser_headers(url: str) -> tuple[str | None, str]:
 # COMMAND ----------
 
 # ---------------------------------------------------------------------------
+# Strategy 3: curl_cffi — browser TLS fingerprint impersonation
+# ---------------------------------------------------------------------------
+
+def strategy_curl_cffi(url: str) -> tuple[str | None, str]:
+    try:
+        from curl_cffi import requests as curl_requests
+    except ImportError:
+        return None, "curl_cffi not installed — add to requirements.txt"
+    try:
+        resp = curl_requests.get(url, impersonate="chrome120", timeout=20)
+        resp.raise_for_status()
+        text = trafilatura.extract(resp.text, include_comments=False, include_tables=False)
+        if text is None:
+            return None, f"HTTP {resp.status_code} ok but no content extracted"
+        return text, f"HTTP {resp.status_code} ok"
+    except Exception as e:
+        return None, str(e)
+
+# COMMAND ----------
+
+# ---------------------------------------------------------------------------
+# Strategy 4: Wayback Machine CDX API — archived copy fallback
+# ---------------------------------------------------------------------------
+
+def strategy_wayback(url: str) -> tuple[str | None, str]:
+    try:
+        cdx = requests.get(
+            "https://web.archive.org/cdx/search/cdx",
+            params={
+                "url": url,
+                "output": "json",
+                "limit": "1",
+                "fl": "timestamp",
+                "filter": "statuscode:200",
+                "sort": "desc",
+            },
+            timeout=15,
+        )
+        rows = cdx.json()
+        if len(rows) < 2:
+            return None, "not found in Wayback Machine"
+        ts = rows[1][0]
+        archive_url = f"https://web.archive.org/web/{ts}/{url}"
+        html = trafilatura.fetch_url(archive_url)
+        if html is None:
+            return None, "wayback fetch returned None"
+        text = trafilatura.extract(html, include_comments=False, include_tables=False)
+        return (text, "ok") if text else (None, "no content extracted from archive")
+    except Exception as e:
+        return None, str(e)
+
+# COMMAND ----------
+
+# ---------------------------------------------------------------------------
+# Strategy 5: Playwright — full browser rendering with JS execution
+# ---------------------------------------------------------------------------
+
+def strategy_playwright(url: str) -> tuple[str | None, str]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None, "playwright not installed — pip install playwright && playwright install chromium"
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, timeout=30000, wait_until="networkidle")
+            html = page.content()
+            browser.close()
+        text = trafilatura.extract(html, include_comments=False, include_tables=False)
+        return (text, "ok") if text else (None, "rendered but no content extracted")
+    except Exception as e:
+        return None, str(e)
+
+# COMMAND ----------
+
+# ---------------------------------------------------------------------------
 # Run all strategies against all URLs and report results
 # ---------------------------------------------------------------------------
 
 STRATEGIES = [
     ("trafilatura.fetch_url (built-in headers)", strategy_trafilatura),
     ("requests + full browser headers + google referer", strategy_browser_headers),
+    ("curl_cffi browser TLS impersonation", strategy_curl_cffi),
+    ("Wayback Machine CDX API", strategy_wayback),
+    ("Playwright full browser rendering", strategy_playwright),
 ]
 
 for url in TEST_URLS:
