@@ -7,10 +7,10 @@
 # ]
 # ///
 # Pull recent stock news for all watchlist tickers.
-# Each article is saved as an individual JSON file containing the FMP metadata,
-# summary, and full article text fetched from the source URL.
-# A Delta table (stock_news_log) tracks downloaded articles so re-runs are
-# idempotent — only new articles have their full text fetched.
+# Each successfully fetched article is saved as an individual JSON file containing
+# the FMP metadata, summary, and full article text fetched from the source URL.
+# A Delta table (stock_news_log) tracks all attempts — successes and errors —
+# so re-runs are idempotent and fetch errors are available for analytics.
 # Output: UC_VOLUME_PATH/stock_news/{TICKER}/{published_date}_{url_hash}.json
 # FMP Source: F15 — /stable/stock-news
 
@@ -48,10 +48,22 @@ spark.sql(f"""
         url            STRING,
         published_date STRING,
         filename       STRING,
+        fetch_status   STRING,
+        error_message  STRING,
         downloaded_at  TIMESTAMP
     )
     USING DELTA
 """)
+
+# Migrate existing table if fetch_status / error_message columns are absent
+for ddl in [
+    f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.stock_news_log ADD COLUMNS (fetch_status STRING)",
+    f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.stock_news_log ADD COLUMNS (error_message STRING)",
+]:
+    try:
+        spark.sql(ddl)
+    except Exception:
+        pass  # column already exists
 
 # COMMAND ----------
 
@@ -83,27 +95,54 @@ for ticker in EQUITY_TICKERS:
         if not url:
             continue
 
-        # Skip if already in the log
         url_escaped = url.replace("'", "\\'")
-        already_downloaded = spark.sql(f"""
+
+        # Only skip articles that were previously fetched successfully
+        already_success = spark.sql(f"""
             SELECT 1 FROM {UC_CATALOG}.{UC_SCHEMA}.stock_news_log
-            WHERE symbol = '{ticker}' AND url = '{url_escaped}'
+            WHERE symbol = '{ticker}' AND url = '{url_escaped}' AND fetch_status = 'success'
         """).count() > 0
-        if already_downloaded:
+        if already_success:
             print(f"  {ticker} {published_date}: already downloaded, skipping")
             continue
 
-        # Stable filename: date + first 8 chars of URL hash
         url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
         filename = f"{published_date}_{url_hash}.json"
         dest     = f"{ticker_dir}/{filename}"
 
-        full_text = fetch_article_text(url)
+        full_text, error = fetch_article_text(url)
+
+        if error:
+            print(f"  {ticker} {published_date}: fetch error — {error}")
+            error_escaped = error.replace("'", "\\'")
+            spark.sql(f"""
+                MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.stock_news_log AS log
+                USING (
+                    SELECT
+                        '{ticker}'         AS symbol,
+                        '{url_escaped}'    AS url,
+                        '{published_date}' AS published_date,
+                        NULL               AS filename,
+                        'error'            AS fetch_status,
+                        '{error_escaped}'  AS error_message,
+                        current_timestamp() AS downloaded_at
+                ) AS src
+                ON  log.symbol = src.symbol
+                AND log.url    = src.url
+                WHEN MATCHED THEN
+                    UPDATE SET
+                        log.fetch_status   = src.fetch_status,
+                        log.error_message  = src.error_message,
+                        log.downloaded_at  = src.downloaded_at
+                WHEN NOT MATCHED THEN
+                    INSERT *
+            """)
+            continue
 
         article = dict(row)
-        article["summary"]  = article.pop("text", None)
-        article["full_text"] = full_text
-        article["symbol"]    = ticker
+        article["summary"]     = article.pop("text", None)
+        article["full_text"]   = full_text
+        article["symbol"]      = ticker
         article["ingested_at"] = pd.Timestamp.now().isoformat()
 
         with open(dest, "w", encoding="utf-8") as f:
@@ -114,10 +153,12 @@ for ticker in EQUITY_TICKERS:
             MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.stock_news_log AS log
             USING (
                 SELECT
-                    '{ticker}'        AS symbol,
-                    '{url_escaped}'   AS url,
+                    '{ticker}'         AS symbol,
+                    '{url_escaped}'    AS url,
                     '{published_date}' AS published_date,
-                    '{filename}'      AS filename,
+                    '{filename}'       AS filename,
+                    'success'          AS fetch_status,
+                    NULL               AS error_message,
                     current_timestamp() AS downloaded_at
             ) AS src
             ON  log.symbol = src.symbol
@@ -125,6 +166,8 @@ for ticker in EQUITY_TICKERS:
             WHEN MATCHED THEN
                 UPDATE SET
                     log.filename      = src.filename,
+                    log.fetch_status  = src.fetch_status,
+                    log.error_message = src.error_message,
                     log.downloaded_at = src.downloaded_at
             WHEN NOT MATCHED THEN
                 INSERT *
