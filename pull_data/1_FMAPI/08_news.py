@@ -55,16 +55,6 @@ spark.sql(f"""
     USING DELTA
 """)
 
-# Migrate existing table if fetch_status / error_message columns are absent
-for ddl in [
-    f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.stock_news_log ADD COLUMNS (fetch_status STRING)",
-    f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.stock_news_log ADD COLUMNS (error_message STRING)",
-]:
-    try:
-        spark.sql(ddl)
-    except Exception:
-        pass  # column already exists
-
 # COMMAND ----------
 
 # Pull all news from the start of the current month through today
