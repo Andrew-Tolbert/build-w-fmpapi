@@ -39,14 +39,16 @@ clear_directory(volume_subdir("sec_filings"))
 
 # COMMAND ----------
 
-# Filing types to ingest — 10-K and 8-K for covenant / material-event analysis
+# Filing types to ingest — 10-K, 10-Q and 8-K for covenant / material-event analysis
 FILING_TYPES = ["10-K", "10-Q", "8-K"]
-_10K_TYPES   = {"10-K", "10-Q"}
+_10K_TYPES   = {"10-K"}
+_10Q_TYPES   = {"10-Q"}
 _8K_TYPES    = {"8-K"}
 
-# Date range — pull from history start through today
-TO_DATE = pd.Timestamp.now().strftime("%Y-%m-%d")
-FROM_DATE = pd.Timestamp.now().replace(year=pd.Timestamp.now().year - 1, month=1, day=1).strftime("%Y-%m-%d")
+# Limits — only pull the most recent N filings per type per ticker
+LIMIT_10K = 3
+LIMIT_10Q = 3
+LIMIT_8K  = 5
 
 # COMMAND ----------
 
@@ -78,14 +80,22 @@ out_base = volume_subdir("sec_filings")
 
 for ticker in BDC_TICKERS:
     try:
-        all_filings = client.get_sec_filings(ticker, from_date=FROM_DATE, to_date=TO_DATE)
+        all_filings = client.get_sec_filings(ticker)
         matching    = [f for f in all_filings if f.get("formType") in FILING_TYPES]
-        print(f"  {ticker}: {len(all_filings)} total filings, {len(matching)} matching {FILING_TYPES}")
+
+        # Sort descending by filing date, then take only the most recent N per type
+        matching.sort(key=lambda f: f.get("filingDate", ""), reverse=True)
+        tenk   = [f for f in matching if f.get("formType") in _10K_TYPES][:LIMIT_10K]
+        tenq   = [f for f in matching if f.get("formType") in _10Q_TYPES][:LIMIT_10Q]
+        eightk = [f for f in matching if f.get("formType") in _8K_TYPES][:LIMIT_8K]
+        selected = tenk + tenq + eightk
+
+        print(f"  {ticker}: {len(all_filings)} total, selected {len(tenk)} 10-K, {len(tenq)} 10-Q, {len(eightk)} 8-K")
     except Exception as e:
         print(f"  {ticker}: ERROR fetching filings — {e}")
         continue
 
-    for row in matching:
+    for row in selected:
         ftype       = row.get("formType", "UNKNOWN")
         filing_date = str(row.get("filingDate", ""))[:10]
         link        = row.get("link", "")
@@ -105,7 +115,12 @@ for ticker in BDC_TICKERS:
             continue
 
         # Route to the correct subdirectory based on form type
-        subdir     = "10k" if ftype in _10K_TYPES else "8k"
+        if ftype in _10K_TYPES:
+            subdir = "10k"
+        elif ftype in _10Q_TYPES:
+            subdir = "10q"
+        else:
+            subdir = "8k"
         ticker_dir = f"{out_base}/{subdir}/{ticker}"
         os.makedirs(ticker_dir, exist_ok=True)
 
