@@ -129,6 +129,53 @@ class FMPClient:
         return self.get(f"{self._stable}/sec-filings-search/symbol",
                         {"symbol": symbol, "from": from_date, "to": to_date})
 
+    def get_sec_filings_paginated(
+        self,
+        symbol: str,
+        from_date: str,
+        to_date: str,
+        target_forms: dict,
+        page_size: int = 200,
+        max_pages: int = 100,
+    ) -> dict:
+        """Page through SEC filings until every form type in *target_forms* is
+        satisfied, or one of the exit conditions below is met.
+
+        target_forms: {form_type: max_count}, e.g. {"10-K": 3, "424B2": 5}
+        Returns: {form_type: [filing_dict, ...]} — most-recent-first within each type.
+
+        Exit conditions (whichever comes first):
+          1. All target counts satisfied.
+          2. API returns an empty page — no more filings exist.
+          3. API returns a partial page (< page_size) — last page reached.
+          4. max_pages pages fetched — guards against tickers that file thousands
+             of irrelevant forms and never have the ones we want.
+        """
+        collected = {ft: [] for ft in target_forms}
+        page = 0
+        while page < max_pages:
+            batch = self.get(
+                f"{self._stable}/sec-filings-search/symbol",
+                {"symbol": symbol, "from": from_date, "to": to_date,
+                 "page": page, "limit": page_size},
+            )
+            if not batch:
+                break
+            for filing in batch:
+                ft = filing.get("formType", "")
+                if ft in collected and len(collected[ft]) < target_forms[ft]:
+                    collected[ft].append(filing)
+            # Stop early once all targets are satisfied
+            if all(len(collected[ft]) >= target_forms[ft] for ft in target_forms):
+                break
+            # Stop when the last page has been reached
+            if len(batch) < page_size:
+                break
+            page += 1
+        else:
+            print(f"  [{symbol}] hit max_pages={max_pages} ({max_pages * page_size} filings scanned) — some forms may be missing")
+        return collected
+
     # ------------------------------------------------------------------
     # ETF data
     # ------------------------------------------------------------------

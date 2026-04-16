@@ -38,19 +38,6 @@ apply_full_refresh("sec_filings")
 
 # COMMAND ----------
 
-# Filing types to ingest — 10-K, 10-Q and 8-K for covenant / material-event analysis
-FILING_TYPES = ["10-K", "10-Q", "8-K"]
-_10K_TYPES   = {"10-K"}
-_10Q_TYPES   = {"10-Q"}
-_8K_TYPES    = {"8-K"}
-
-# Limits — only pull the most recent N filings per type per ticker
-LIMIT_10K = 3
-LIMIT_10Q = 3
-LIMIT_8K  = 5
-
-# COMMAND ----------
-
 # Create download log table if it doesn't exist
 spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {UC_CATALOG}.{UC_SCHEMA}.sec_filings_log (
@@ -77,26 +64,25 @@ def _accession_id(url: str) -> str:
 
 out_base  = volume_subdir("sec_filings")
 to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
-from_date = pd.Timestamp.today().replace(month=1, day=1).replace(year=pd.Timestamp.today().year - 1).strftime("%Y-%m-%d")
+from_date = HISTORY_START_DATE  # wide enough window to find multiple annual 10-Ks
 
-# COMMAND ----------
+for ticker in get_tickers(types=["equity", "private_credit"]):
+    target_forms = TICKER_CONFIG.get(ticker, {}).get("sec_forms")
+    if not target_forms:
+        print(f"  {ticker}: no SEC filing config, skipping")
+        continue
 
-for ticker in EQUITY_TICKERS:
     try:
-        all_filings = client.get_sec_filings(ticker, from_date=from_date, to_date=to_date)
-        matching    = [f for f in all_filings if f.get("formType") in FILING_TYPES]
-
-        # Sort descending by filing date, then take only the most recent N per type
-        matching.sort(key=lambda f: f.get("filingDate", ""), reverse=True)
-        tenk   = [f for f in matching if f.get("formType") in _10K_TYPES][:LIMIT_10K]
-        tenq   = [f for f in matching if f.get("formType") in _10Q_TYPES][:LIMIT_10Q]
-        eightk = [f for f in matching if f.get("formType") in _8K_TYPES][:LIMIT_8K]
-        selected = tenk + tenq + eightk
-
-        print(f"  {ticker}: {len(all_filings)} total, selected {len(tenk)} 10-K, {len(tenq)} 10-Q, {len(eightk)} 8-K")
+        filings_by_type = client.get_sec_filings_paginated(
+            ticker, from_date=from_date, to_date=to_date, target_forms=target_forms
+        )
+        counts = {ft: len(v) for ft, v in filings_by_type.items()}
+        print(f"  {ticker}: found {counts}")
     except Exception as e:
         print(f"  {ticker}: ERROR fetching filings — {e}")
         continue
+
+    selected = [row for filings in filings_by_type.values() for row in filings]
 
     for row in selected:
         ftype       = row.get("formType", "UNKNOWN")
@@ -117,13 +103,8 @@ for ticker in EQUITY_TICKERS:
             print(f"  {ticker} {ftype} {filing_date}: already downloaded, skipping")
             continue
 
-        # Route to the correct subdirectory based on form type
-        if ftype in _10K_TYPES:
-            subdir = "10k"
-        elif ftype in _10Q_TYPES:
-            subdir = "10q"
-        else:
-            subdir = "8k"
+        # Derive subdir from form type: "10-K" → "10k", "8-K" → "8k", etc.
+        subdir     = ftype.lower().replace("-", "")
         ticker_dir = f"{out_base}/{subdir}/{ticker}"
         os.makedirs(ticker_dir, exist_ok=True)
 

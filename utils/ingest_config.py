@@ -83,6 +83,36 @@ def apply_full_refresh(section: str) -> None:
         except Exception as e:
             print(f"[refresh] Could not drop log table {log_table}: {e}")
 
+# ── Ticker configuration ───────────────────────────────────────────────────────
+# Single source of truth for every ticker in the pipeline.
+#   type     — asset class: "equity", "etf", "private_credit"
+#   limited  — include when LIMITED_LOAD = True (one representative per type)
+#   sec_forms — {form_type: max_count} for 05_sec_filings.py;
+#               omit or leave empty for tickers that don't file those forms
+#
+# Benchmark index symbols (^GSPC, ^VIX …) are market-data feeds, not equities;
+# they stay in INDEX_SYMBOLS / VIX_SYMBOL below and are not ticker-config driven.
+
+TICKER_CONFIG = {
+    # ── Equities / alt managers ────────────────────────────────────────────────
+    "GS":   {"type": "equity",         "limited": True,  "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "MS":   {"type": "equity",         "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "JPM":  {"type": "equity",         "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "BX":   {"type": "equity",         "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "APO":  {"type": "equity",         "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "KKR":  {"type": "equity",         "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    # ── ETFs — no SEC filings of interest ─────────────────────────────────────
+    "SPY":  {"type": "etf",            "limited": True,  "sec_forms": {}},
+    "AGG":  {"type": "etf",            "limited": False, "sec_forms": {}},
+    "BKLN": {"type": "etf",            "limited": False, "sec_forms": {}},
+    "HYG":  {"type": "etf",            "limited": False, "sec_forms": {}},
+    "QQQ":  {"type": "etf",            "limited": False, "sec_forms": {}},
+    "IWM":  {"type": "etf",            "limited": False, "sec_forms": {}},
+    # ── Private credit / BDC anchor tickers ───────────────────────────────────
+    "AINV": {"type": "private_credit", "limited": True,  "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "OCSL": {"type": "private_credit", "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+}
+
 # COMMAND ----------
 
 # FMP API — key loaded from Databricks UC secret scope
@@ -98,37 +128,34 @@ FMP_BASE_URL_V3     = "https://financialmodelingprep.com/api/v3"
 
 # COMMAND ----------
 
-# ── Run mode ──────────────────────────────────────────────────────────────────
-# Set TEST_MODE = True to use the sample ticker lists (minimal API calls).
-# Set TEST_MODE = False to use the full production lists.
-TEST_MODE = True
+# ── Load mode ─────────────────────────────────────────────────────────────────
+# LIMITED_LOAD = True  → only tickers flagged limited=True in TICKER_CONFIG
+# LIMITED_LOAD = False → all tickers in TICKER_CONFIG
+LIMITED_LOAD = True
+
+def get_tickers(types=None):
+    """Return ticker symbols from TICKER_CONFIG, respecting LIMITED_LOAD.
+
+    types: list of type strings to include, e.g. ["etf"] or ["equity", "private_credit"].
+           Pass None to include all types.
+    """
+    result = []
+    for symbol, cfg in TICKER_CONFIG.items():
+        if types is not None and cfg["type"] not in types:
+            continue
+        if LIMITED_LOAD and not cfg.get("limited", False):
+            continue
+        result.append(symbol)
+    return result
 
 # COMMAND ----------
 
-# Anchor BDC tickers — core private credit vehicles for covenant analysis
-BDC_TICKERS = ["AINV", "OCSL"]
+# Derived ticker lists — consumed by ingestion notebooks
+EQUITY_TICKERS = get_tickers()                           # all types (respects LIMITED_LOAD)
+ETF_TICKERS    = get_tickers(types=["etf"])              # ETF-specific endpoints (06_etf_data)
+BDC_TICKERS    = get_tickers(types=["private_credit"])   # transcripts, covenant analysis
 
-# ── Ticker lists ──────────────────────────────────────────────────────────────
-_EQUITY_TICKERS_SAMPLE = [
-    "GS",   # one equity
-    "SPY",  # one index fund
-]
-
-_EQUITY_TICKERS_FULL = [
-    "GS", "MS", "JPM",  # Financials
-    "BX", "APO", "KKR", # Alt managers
-    "SPY", "AGG",        # Benchmark ETFs
-    "BKLN", "HYG",       # Credit ETFs
-] + BDC_TICKERS
-
-_ETF_TICKERS_SAMPLE = ["SPY"]
-_ETF_TICKERS_FULL   = ["SPY", "AGG", "BKLN", "HYG", "QQQ", "IWM"]
-
-# Active lists — resolved by TEST_MODE
-EQUITY_TICKERS = _EQUITY_TICKERS_SAMPLE if TEST_MODE else _EQUITY_TICKERS_FULL
-ETF_TICKERS    = _ETF_TICKERS_SAMPLE    if TEST_MODE else _ETF_TICKERS_FULL
-
-# Benchmark index symbols
+# Benchmark index symbols — market-data feeds, not in TICKER_CONFIG
 INDEX_SYMBOLS = ["^GSPC", "^DJI", "^IXIC"]
 VIX_SYMBOL    = "^VIX"
 
@@ -138,7 +165,7 @@ HISTORY_START_DATE = "2023-01-01"
 # COMMAND ----------
 
 print(f"Config loaded — volume: {UC_VOLUME_PATH}")
-print(f"Mode: {'TEST' if TEST_MODE else 'FULL'}")
-print(f"BDC anchors: {BDC_TICKERS}")
-print(f"Equity tickers ({len(EQUITY_TICKERS)}): {EQUITY_TICKERS}")
-print(f"ETF tickers ({len(ETF_TICKERS)}): {ETF_TICKERS}")
+print(f"Load mode: {'LIMITED' if LIMITED_LOAD else 'FULL'}")
+print(f"All tickers  ({len(EQUITY_TICKERS)}): {EQUITY_TICKERS}")
+print(f"ETF tickers  ({len(ETF_TICKERS)}): {ETF_TICKERS}")
+print(f"BDC tickers  ({len(BDC_TICKERS)}): {BDC_TICKERS}")
