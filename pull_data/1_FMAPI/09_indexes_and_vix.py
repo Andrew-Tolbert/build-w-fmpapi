@@ -39,22 +39,6 @@ def clean_symbol(s):
 
 # COMMAND ----------
 
-# # --- F16/F18: Real-time index + VIX quotes — write one file per symbol ---
-# print("Fetching index + VIX quotes...")
-# quotes = client.get_index_quote(ALL_INDEX_SYMBOLS)
-# quotes_by_symbol = {q["symbol"]: q for q in quotes} if quotes else {}
-
-# for symbol in ALL_INDEX_SYMBOLS:
-#     sym_dir = f"{out_base}/{clean_symbol(symbol)}"
-#     os.makedirs(sym_dir, exist_ok=True)
-#     record = quotes_by_symbol.get(symbol, {})
-#     df = pd.DataFrame([record] if record else [])
-#     df["ingested_at"] = pd.Timestamp.now().isoformat()
-#     df.to_json(f"{sym_dir}/{_ts}_quote.json", orient="records", indent=2)
-#     print(f"  {symbol}: quote written")
-
-# COMMAND ----------
-
 # --- F17/F18: Historical prices per symbol ---
 from_date = HISTORY_START_DATE
 to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -71,23 +55,3 @@ for symbol in ALL_INDEX_SYMBOLS:
         print(f"  {symbol}: {len(df)} days")
     except Exception as e:
         print(f"  {symbol}: ERROR — {e}")
-
-# COMMAND ----------
-
-# --- F19: Index constituents — one file per index ---
-# print("\nFetching index constituents...")
-# for fetch_fn, index_name in [
-#     (client.get_sp500_constituents,    "SP500"),
-#     (client.get_nasdaq_constituents,   "NASDAQ100"),
-#     (client.get_dowjones_constituents, "DJIA"),
-# ]:
-#     try:
-#         df = pd.DataFrame(fetch_fn())
-#         df["index"] = index_name
-#         df["ingested_at"] = pd.Timestamp.now().isoformat()
-#         idx_dir = f"{out_base}/{index_name}"
-#         os.makedirs(idx_dir, exist_ok=True)
-#         df.to_json(f"{idx_dir}/{_ts}_constituents.json", orient="records", indent=2)
-#         print(f"  {index_name}: {len(df)} constituents")
-#     except Exception as e:
-#         print(f"  {index_name}: ERROR — {e}")

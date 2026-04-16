@@ -35,7 +35,7 @@ _ts = ts_prefix()
 
 for ticker in EQUITY_TICKERS:
     try:
-        est = client.get_analyst_estimates(ticker, period="quarterly",limit=8)
+        est = client.get_analyst_estimates(ticker, period="quarterly",limit=25)
         pt  = client.get_price_target_consensus(ticker)
         gr  = client.get_grades_summary(ticker)
 
