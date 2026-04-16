@@ -32,7 +32,7 @@ apply_full_refresh("financials")
 out_base = volume_subdir("financials")
 _ts = ts_prefix()
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         income          = client.get_income_statement(ticker, period="quarterly", limit=24)
         balance         = client.get_balance_sheet(ticker, period="quarterly", limit=24)

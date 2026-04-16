@@ -33,7 +33,7 @@ apply_full_refresh("key_metrics")
 out_base = volume_subdir("key_metrics")
 _ts = ts_prefix()
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         metrics = client.get_key_metrics(ticker, period="quarterly", limit=24)
         ratios  = client.get_ratios(ticker, period="quarterly", limit=24)

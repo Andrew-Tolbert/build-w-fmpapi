@@ -32,7 +32,7 @@ apply_full_refresh("analyst_data")
 out_base = volume_subdir("analyst_data")
 _ts = ts_prefix()
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         est = client.get_analyst_estimates(ticker, period="quarterly",limit=25)
         pt  = client.get_price_target_consensus(ticker)

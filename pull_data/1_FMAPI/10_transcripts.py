@@ -58,7 +58,7 @@ spark.sql(f"""
 
 out_base = volume_subdir("transcripts")
 
-for ticker in BDC_TICKERS:
+for ticker in get_tickers():
     ticker_dir = f"{out_base}/{ticker}"
     os.makedirs(ticker_dir, exist_ok=True)
 

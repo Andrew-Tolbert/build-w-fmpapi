@@ -40,7 +40,7 @@ print(f"Fetching price history for {len(EQUITY_TICKERS)} tickers...")
 
 out_base = volume_subdir("historical_prices")
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         rows = client.get_historical_prices(ticker, from_date, to_date)
         df = pd.DataFrame(rows)

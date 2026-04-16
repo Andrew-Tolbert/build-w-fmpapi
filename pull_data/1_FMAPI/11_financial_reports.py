@@ -49,7 +49,7 @@ spark.sql(f"""
 
 out_base = volume_subdir("financial_reports")
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         dates = client.get_financial_report_dates(ticker)
         # Sort by fiscal year desc, then period desc (Q4 > Q3 > Q2 > Q1 > FY), take most recent 5

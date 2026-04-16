@@ -34,7 +34,7 @@ out_base = volume_subdir("company_profiles")
 _ts = ts_prefix()
 print(f"Fetching profiles for {len(EQUITY_TICKERS)} tickers...")
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         ticker_dir = f"{out_base}/{ticker}"
         profile_path = f"{ticker_dir}/{_ts}_profile.json"

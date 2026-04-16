@@ -63,7 +63,7 @@ to_date   = today.strftime("%Y-%m-%d")
 
 out_base = volume_subdir("stock_news")
 
-for ticker in EQUITY_TICKERS:
+for ticker in get_tickers():
     try:
         rows = client.get_stock_news(ticker, from_date=from_date, to_date=to_date)
         if not rows:
