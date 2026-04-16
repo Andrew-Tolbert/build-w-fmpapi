@@ -79,6 +79,8 @@ out_base  = volume_subdir("sec_filings")
 to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
 from_date = pd.Timestamp.today().replace(month=1, day=1).replace(year=pd.Timestamp.today().year - 1).strftime("%Y-%m-%d")
 
+# COMMAND ----------
+
 for ticker in EQUITY_TICKERS:
     try:
         all_filings = client.get_sec_filings(ticker, from_date=from_date, to_date=to_date)
