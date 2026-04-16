@@ -32,6 +32,57 @@ def clear_directory(path):
     except Exception as e:
         print(f"Could not clear {path}: {e}")
 
+# ── Full-refresh configuration ─────────────────────────────────────────────────
+# Set full_refresh=True for a section to wipe its volume directory (and drop its
+# log table, if any) at the start of the next run.
+#
+# SAFE to full-refresh (API calls are lightweight / quick to re-fetch):
+#   company_profiles, historical_prices, financials, key_metrics,
+#   etf_data, analyst_data, indexes
+#
+# NOT SAFE by default (web-scraped, rate-limited, or large downloads):
+#   stock_news        — article full-text requires individual HTTP fetches
+#   sec_filings       — EDGAR HTML documents, fetched one-by-one
+#   financial_reports — large structured JSON reports per ticker/period
+#   transcripts       — earnings call transcripts, limited availability
+#   (For these, full_refresh also drops the log table so items are re-fetched.)
+
+REFRESH_CONFIG = {
+    "company_profiles":  {"full_refresh": True, "log_table": None},
+    "historical_prices": {"full_refresh": True, "log_table": None},
+    "financials":        {"full_refresh": True, "log_table": None},
+    "key_metrics":       {"full_refresh": True, "log_table": None},
+    "etf_data":          {"full_refresh": True, "log_table": None},
+    "analyst_data":      {"full_refresh": True, "log_table": None},
+    "indexes":           {"full_refresh": True, "log_table": None},
+    # These have log tables — full refresh clears the dir AND drops the log table
+    "stock_news":        {"full_refresh": False, "log_table": "stock_news_log"},
+    "financial_reports": {"full_refresh": False, "log_table": "financial_reports_log"},
+    "sec_filings":       {"full_refresh": False, "log_table": "sec_filings_log"},
+    "transcripts":       {"full_refresh": False, "log_table": "transcripts_log"},
+}
+
+
+def apply_full_refresh(section: str) -> None:
+    """Clear the volume directory (and drop its log table) for *section* if
+    REFRESH_CONFIG[section]['full_refresh'] is True.  Call this at the top of
+    each ingestion notebook, before any writes."""
+    cfg = REFRESH_CONFIG.get(section)
+    if cfg is None:
+        print(f"[refresh] Unknown section '{section}' — skipping")
+        return
+    if not cfg["full_refresh"]:
+        return
+    print(f"[refresh] Full refresh enabled for '{section}'")
+    clear_directory(volume_subdir(section))
+    log_table = cfg.get("log_table")
+    if log_table:
+        try:
+            spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.{log_table}")
+            print(f"[refresh] Dropped log table: {UC_CATALOG}.{UC_SCHEMA}.{log_table}")
+        except Exception as e:
+            print(f"[refresh] Could not drop log table {log_table}: {e}")
+
 # COMMAND ----------
 
 # FMP API — key loaded from Databricks UC secret scope

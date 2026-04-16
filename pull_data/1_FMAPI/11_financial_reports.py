@@ -27,8 +27,7 @@ import json
 
 client = FMPClient(api_key=FMP_API_KEY)
 
-# Uncomment to wipe all downloaded report files before re-ingesting:
-# clear_directory(volume_subdir("financial_reports"))
+apply_full_refresh("financial_reports")
 
 # COMMAND ----------
 

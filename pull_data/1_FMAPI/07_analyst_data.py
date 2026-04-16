@@ -25,8 +25,7 @@ import pandas as pd
 
 client = FMPClient(api_key=FMP_API_KEY)
 
-# Uncomment to wipe all data for this feed before re-ingesting:
-clear_directory(volume_subdir("analyst_data"))
+apply_full_refresh("analyst_data")
 
 # COMMAND ----------
 

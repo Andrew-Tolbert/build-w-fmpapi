@@ -30,8 +30,7 @@ ALL_INDEX_SYMBOLS = INDEX_SYMBOLS + [VIX_SYMBOL]  # ^GSPC, ^DJI, ^IXIC, ^VIX
 out_base = volume_subdir("indexes")
 _ts = ts_prefix()
 
-# Uncomment to wipe all data for this feed before re-ingesting:
-# clear_directory(volume_subdir("indexes"))
+apply_full_refresh("indexes")
 
 def clean_symbol(s):
     """Strip ^ for use as a directory name (e.g. ^GSPC → GSPC)."""
