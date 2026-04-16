@@ -167,7 +167,3 @@ for ticker in EQUITY_TICKERS:
 # COMMAND ----------
 
 display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.sec_filings_log"))
-
-# COMMAND ----------
-
-# spark.sql(f"DROP TABLE {UC_CATALOG}.{UC_SCHEMA}.sec_filings_log")
