@@ -75,11 +75,13 @@ def _accession_id(url: str) -> str:
     return m.group(1) if m else "NOACC"
 
 
-out_base = volume_subdir("sec_filings")
+out_base  = volume_subdir("sec_filings")
+to_date   = pd.Timestamp.today().strftime("%Y-%m-%d")
+from_date = pd.Timestamp.today().replace(month=1, day=1).replace(year=pd.Timestamp.today().year - 1).strftime("%Y-%m-%d")
 
-for ticker in BDC_TICKERS:
+for ticker in EQUITY_TICKERS:
     try:
-        all_filings = client.get_sec_filings(ticker)
+        all_filings = client.get_sec_filings(ticker, from_date=from_date, to_date=to_date)
         matching    = [f for f in all_filings if f.get("formType") in FILING_TYPES]
 
         # Sort descending by filing date, then take only the most recent N per type
