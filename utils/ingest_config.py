@@ -110,7 +110,8 @@ TICKER_CONFIG = {
     "IWM":  {"type": "etf",            "limited": False, "sec_forms": {}},
     # ── Private credit / BDC anchor tickers ───────────────────────────────────
     "AINV": {"type": "private_credit", "limited": True,  "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
-    "OCSL": {"type": "private_credit", "limited": False, "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "OCSL": {"type": "private_credit", "limited": True,  "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
+    "TCPC": {"type": "private_credit", "limited": True,  "sec_forms": {"10-K": 3, "10-Q": 3, "8-K": 5, "424B2": 5, "424B5": 5}},
 }
 
 # COMMAND ----------
