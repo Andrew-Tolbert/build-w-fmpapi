@@ -51,13 +51,22 @@
 
 # COMMAND ----------
 
+# MAGIC %run ../utils/fmp_client
+
+# COMMAND ----------
+
 from edgar import Company, set_identity
 import pandas as pd
 
 set_identity("andrew.tolbert@databricks.com")  # required by SEC EDGAR fair-use policy
 
+client      = FMPClient(api_key=FMP_API_KEY)
 BDC_TICKERS = get_tickers(types=["private_credit"])
 print(f"BDC tickers: {BDC_TICKERS}")
+
+def get_company(ticker: str) -> Company:
+    """Return an edgartools Company using CIK looked up via FMP profile."""
+    return Company(int(client.get_cik(ticker)))
 
 THRESHOLDS = {
     "pik_nii_watch":         20.0,
@@ -98,7 +107,7 @@ print("TIER 1 — PIK-to-NII Ratio")
 print("=" * 65)
 
 for ticker in BDC_TICKERS:
-    facts = Company(ticker).get_facts()
+    facts = get_company(ticker).get_facts()
 
     pik = facts.time_series("us-gaap:InterestIncomeOperatingPaidInKind")
     nii = facts.time_series("us-gaap:NetInvestmentIncome")
@@ -139,7 +148,7 @@ print("TIER 1 — Dividend Coverage (NII per share / dividends declared)")
 print("=" * 65)
 
 for ticker in BDC_TICKERS:
-    facts = Company(ticker).get_facts()
+    facts = get_company(ticker).get_facts()
 
     nii_ps = facts.time_series("us-gaap:InvestmentCompanyInvestmentIncomeLossPerShare")
     div_ps = facts.time_series("us-gaap:CommonStockDividendsPerShareDeclared")
@@ -177,7 +186,7 @@ print("TIER 2 — NAV Trajectory (consecutive quarterly declines)")
 print("=" * 65)
 
 for ticker in BDC_TICKERS:
-    facts = Company(ticker).get_facts()
+    facts = get_company(ticker).get_facts()
 
     nav = facts.time_series("us-gaap:NetAssetValuePerShare")
     if nav is None:
@@ -209,7 +218,7 @@ print("TIER 2 — Unrealized Depreciation / NAV")
 print("=" * 65)
 
 for ticker in BDC_TICKERS:
-    facts = Company(ticker).get_facts()
+    facts = get_company(ticker).get_facts()
 
     dep    = facts.time_series("us-gaap:TaxBasisOfInvestmentsGrossUnrealizedDepreciation")
     assets = facts.time_series("us-gaap:AssetsNet")
@@ -249,7 +258,7 @@ print("TIER 3 — Realized Loss Acceleration (YoY)")
 print("=" * 65)
 
 for ticker in BDC_TICKERS:
-    facts = Company(ticker).get_facts()
+    facts = get_company(ticker).get_facts()
 
     rl = facts.time_series("us-gaap:RealizedInvestmentGainsLosses")
     if rl is None:
@@ -278,7 +287,7 @@ print("TIER 3 — Cumulative Losses vs. Book Value (NAV/share)")
 print("=" * 65)
 
 for ticker in BDC_TICKERS:
-    facts = Company(ticker).get_facts()
+    facts = get_company(ticker).get_facts()
 
     gl_ps = facts.time_series("us-gaap:InvestmentCompanyGainLossOnInvestmentPerShare")
     nav   = facts.time_series("us-gaap:NetAssetValuePerShare")
@@ -307,7 +316,7 @@ for ticker in BDC_TICKERS:
 
 def scan_bdc(ticker: str) -> dict:
     """Scan a BDC for all 7 warning signals. Returns a dict of computed values."""
-    facts   = Company(ticker).get_facts()
+    facts   = get_company(ticker).get_facts()
     signals = {"ticker": ticker}
 
     # T1: PIK ratio
