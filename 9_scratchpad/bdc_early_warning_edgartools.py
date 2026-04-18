@@ -51,8 +51,10 @@
 
 # COMMAND ----------
 
-from edgar import Company
+from edgar import Company, set_identity
 import pandas as pd
+
+set_identity("andrew.tolbert@databricks.com")  # required by SEC EDGAR fair-use policy
 
 BDC_TICKERS = get_tickers(types=["private_credit"])
 print(f"BDC tickers: {BDC_TICKERS}")
