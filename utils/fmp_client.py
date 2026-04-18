@@ -49,6 +49,14 @@ class FMPClient:
         data = self.get(f"{self._stable}/profile", {"symbol": symbol})
         return data[0] if isinstance(data, list) and data else data
 
+    def get_cik(self, symbol: str) -> str:
+        """Return the SEC CIK for *symbol*, zero-padded to 10 digits."""
+        profile = self.get_profile(symbol)
+        cik = profile.get("cik") or profile.get("CIK") or ""
+        if not cik:
+            raise ValueError(f"No CIK in FMP profile for '{symbol}'")
+        return str(cik).zfill(10)
+
     def get_profiles(self, symbols: list[str]) -> list[dict]:
         results = []
         for symbol in symbols:

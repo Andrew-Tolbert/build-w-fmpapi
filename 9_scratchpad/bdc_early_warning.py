@@ -11,7 +11,8 @@
 # Replicates the framework from:
 #   https://www.edgartools.io/building-a-bdc-early-warning-system-in-python/
 #
-# Data source: SEC EDGAR free APIs — no API key required.
+# CIK lookup: FMPClient.get_cik() — pulls from /stable/profile (uses FMP_API_KEY)
+# Financial data: SEC EDGAR XBRL free APIs — no additional key required.
 #   data.sec.gov/api/xbrl/companyfacts/{CIK}.json  → all XBRL financial facts
 #   data.sec.gov/submissions/CIK{CIK}.json         → filing metadata
 #
@@ -42,52 +43,48 @@
 
 # COMMAND ----------
 
-import json
-import requests
-import pandas as pd
-import numpy as np
-
-HEADERS = {"User-Agent": "andrew.tolbert@databricks.com"}  # SEC requires a real User-Agent
-
-BDC_TICKERS = ["AINV", "OCSL"]
-
-# ── Warning thresholds ─────────────────────────────────────────────────────────
-THRESHOLDS = {
-    "pik_nii_warn":            0.20,   # PIK / NII warn level
-    "pik_nii_critical":        0.30,   # PIK / NII critical level
-    "div_coverage_alert":      1.05,   # NII coverage of dividends alert level
-    "div_coverage_critical":   1.00,   # NII coverage of dividends critical level
-    "non_accrual_flag":        0.03,   # non-accrual / portfolio FV flag level
-    "cum_loss_book_flag":      0.05,   # cumulative realized losses / book value flag
-    "nav_decline_quarters":    3,      # consecutive quarterly NAV declines to flag
-}
-
-def cik10(cik: int) -> str:
-    return str(cik).zfill(10)
+# MAGIC %run ../utils/ingest_config
 
 # COMMAND ----------
 
-# ── CIK lookup ─────────────────────────────────────────────────────────────────
+# MAGIC %run ../utils/fmp_client
 
-_tickers_url = "https://www.sec.gov/files/company_tickers.json"
-_ticker_map_raw = requests.get(_tickers_url, headers=HEADERS).json()
-TICKER_TO_CIK = {v["ticker"]: int(v["cik_str"]) for v in _ticker_map_raw.values()}
+# COMMAND ----------
 
-def get_cik(ticker: str) -> int:
-    cik = TICKER_TO_CIK.get(ticker.upper())
-    if cik is None:
-        raise ValueError(f"'{ticker}' not found in SEC ticker map")
-    return cik
+import requests
+import pandas as pd
+
+HEADERS = {"User-Agent": "andrew.tolbert@databricks.com"}  # SEC requires a real User-Agent
+
+client     = FMPClient(api_key=FMP_API_KEY)
+BDC_TICKERS = get_tickers(types=["private_credit"])
+
+# ── Warning thresholds ─────────────────────────────────────────────────────────
+THRESHOLDS = {
+    "pik_nii_warn":            0.20,
+    "pik_nii_critical":        0.30,
+    "div_coverage_alert":      1.05,
+    "div_coverage_critical":   1.00,
+    "non_accrual_flag":        0.03,
+    "cum_loss_book_flag":      0.05,
+    "nav_decline_quarters":    3,
+}
+
+# COMMAND ----------
+
+# ── CIK lookup via FMP profile ─────────────────────────────────────────────────
+# FMPClient.get_cik() calls /stable/profile and extracts the cik field,
+# zero-padded to 10 digits as EDGAR expects.
 
 for t in BDC_TICKERS:
-    print(f"{t}: CIK {get_cik(t)}  (padded: {cik10(get_cik(t))})")
+    print(f"{t}: CIK {client.get_cik(t)}")
 
 # COMMAND ----------
 
 # ── Pull submissions (company metadata + recent filing index) ──────────────────
 
 def get_submissions(ticker: str) -> dict:
-    url = f"https://data.sec.gov/submissions/CIK{cik10(get_cik(ticker))}.json"
+    url = f"https://data.sec.gov/submissions/CIK{client.get_cik(ticker)}.json"
     r = requests.get(url, headers=HEADERS)
     r.raise_for_status()
     return r.json()
@@ -101,7 +98,7 @@ for t, s in subs.items():
 # ── Pull all XBRL facts ────────────────────────────────────────────────────────
 
 def get_company_facts(ticker: str) -> dict:
-    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10(get_cik(ticker))}.json"
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{client.get_cik(ticker)}.json"
     r = requests.get(url, headers=HEADERS)
     r.raise_for_status()
     return r.json()
@@ -440,11 +437,11 @@ for ticker in BDC_TICKERS:
         print(f"  Recent 10-K / 10-Q filing URLs for {ticker}:")
         recent_filings = pd.DataFrame(subs[ticker]["filings"]["recent"])
         key = recent_filings[recent_filings["form"].isin(["10-K", "10-Q"])].head(6)
-        cik_padded = cik10(get_cik(ticker))
+        cik_padded = client.get_cik(ticker)
         for _, row in key.iterrows():
             acc_clean = row["accessionNumber"].replace("-", "")
             doc_url   = (f"https://www.sec.gov/Archives/edgar/data/"
-                         f"{get_cik(ticker)}/{acc_clean}/{row['primaryDocument']}")
+                         f"{int(cik_padded)}/{acc_clean}/{row['primaryDocument']}")
             print(f"    [{row['form']}] {row['filingDate']}  {doc_url}")
 
 # COMMAND ----------
