@@ -134,7 +134,8 @@ def extract_concept(facts_dict: dict, concept: str, unit: str = "USD") -> pd.Dat
             ((df["form"] == "10-Q") & (df["days"].between(75, 110)))
         ]
     df = df.sort_values("end").drop_duplicates(subset=["end", "form"], keep="last")
-    df["ticker"] = None  # filled by caller
+    df["concept"] = concept
+    df["ticker"]  = None  # filled by caller
     return df[["end", "val", "form", "accn", "concept"] +
               (["start", "days"] if "start" in df.columns and df["start"].notna().any() else [])]
 
