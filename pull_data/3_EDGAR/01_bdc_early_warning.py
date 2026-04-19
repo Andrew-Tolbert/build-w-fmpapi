@@ -111,14 +111,29 @@ bdc_time_series["ingested_at"] = pd.Timestamp.now().isoformat()
 
 # ── bdc_fy_snapshot — wide format, latest FY value per ticker/metric ───────────
 
-bdc_fy_snapshot = (
+fy_raw = (
     raw[raw["fiscal_period"] == "FY"]
     .sort_values("period_end")
     .drop_duplicates(subset=["ticker", "metric"], keep="last")
+)
+
+bdc_fy_snapshot = (
+    fy_raw
     .pivot(index=["ticker", "cik", "year_quarter"], columns="metric", values="numeric_value")
     .reset_index()
 )
-bdc_fy_snapshot.columns.name   = None
+bdc_fy_snapshot.columns.name = None
+
+# Merge optional filing columns back from the most recent FY row per ticker
+optional_cols = [c for c in ["accession_number", "form", "period_start"] if c in fy_raw.columns]
+if optional_cols:
+    filing_meta = (
+        fy_raw.sort_values("period_end")
+        .drop_duplicates(subset=["ticker"], keep="last")
+        [["ticker", "cik"] + optional_cols]
+    )
+    bdc_fy_snapshot = bdc_fy_snapshot.merge(filing_meta, on=["ticker", "cik"], how="left")
+
 bdc_fy_snapshot["ingested_at"] = pd.Timestamp.now().isoformat()
 
 # ── Write CSVs ─────────────────────────────────────────────────────────────────
