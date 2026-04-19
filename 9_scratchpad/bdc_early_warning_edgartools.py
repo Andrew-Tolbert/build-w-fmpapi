@@ -3,7 +3,7 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # dependencies = [
-#   "edgartools",
+#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
 # ]
 # ///
 # BDC Early Warning System — edgartools implementation
@@ -114,6 +114,10 @@ display(raw.groupby(["ticker", "metric"]).size().unstack(fill_value=0))
 
 # COMMAND ----------
 
+raw
+
+# COMMAND ----------
+
 # ── Step 2: Build FY snapshot — latest annual value per ticker/metric ──────────
 
 fy_latest = (
@@ -216,7 +220,7 @@ display(bdcs.head(10))
 
 # COMMAND ----------
 
-dataset = fetch_bdc_dataset(2024, 4)
+dataset = fetch_bdc_dataset(2025, 1)
 top = dataset.schedule_of_investments.top_companies(25)
 print("Top 25 portfolio companies by number of BDC holders:")
 display(top)
