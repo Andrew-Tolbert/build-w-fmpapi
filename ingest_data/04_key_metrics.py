@@ -177,4 +177,4 @@ for suffix, table in [
 
 # COMMAND ----------
 
-schema(target_schema)
+

@@ -19,6 +19,10 @@
 
 # COMMAND ----------
 
+from pyspark.sql.functions import col
+
+# COMMAND ----------
+
 # # Uncomment to wipe tables before re-running
 # for t in ["bronze_etf_info", "bronze_etf_holdings", "bronze_etf_sectors"]:
 #     spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.{t}")
@@ -93,10 +97,11 @@ for suffix, table in [
     ("etf_sectors",  "bronze_etf_sectors"),
 ]:
     path = f"{base}/*/*_{suffix}.json"
-    df = spark.read.option("multiline", "true").json(path)
+    target_schema = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.{table}").schema
+    df = spark.read.option("multiline", "true").schema(target_schema).json(path)
     df.write.mode("overwrite").saveAsTable(f"{UC_CATALOG}.{UC_SCHEMA}.{table}")
     print(f"Loaded {df.count()} rows into {UC_CATALOG}.{UC_SCHEMA}.{table}")
 
 # COMMAND ----------
 
-display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_etf_holdings").orderBy("etf_symbol", col("weightPercentage").desc()).limit(100))
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_etf_info").filter(col("symbol") == "SPY"))
