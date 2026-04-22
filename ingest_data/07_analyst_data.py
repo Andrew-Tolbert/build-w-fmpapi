@@ -102,3 +102,11 @@ for suffix, table in [
 # COMMAND ----------
 
 display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_analyst_estimates").orderBy("symbol", "date"))
+
+# COMMAND ----------
+
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_price_targets"))
+
+# COMMAND ----------
+
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_analyst_ratings"))

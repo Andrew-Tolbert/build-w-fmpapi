@@ -28,6 +28,7 @@ spark.sql(f"""
         symbol        STRING,
         url           STRING,
         publishedDate STRING,
+        publisher     STRING,
         title         STRING,
         summary       STRING,
         full_text     STRING,
@@ -41,6 +42,7 @@ spark.sql(f"""
 # COMMAND ----------
 
 checkpoint_path = f"{UC_VOLUME_PATH}/_checkpoints/bronze_stock_news"
+schema_path     = f"{UC_VOLUME_PATH}/_schemas/bronze_stock_news"
 source_path     = f"{UC_VOLUME_PATH}/stock_news/*/*.json"
 
 query = (
@@ -48,6 +50,7 @@ query = (
         .format("cloudFiles")
         .option("cloudFiles.format", "json")
         .option("cloudFiles.inferColumnTypes", "true")
+        .option("cloudFiles.schemaLocation", schema_path)
         .option("multiLine", "true")
         .load(source_path)
         .writeStream
