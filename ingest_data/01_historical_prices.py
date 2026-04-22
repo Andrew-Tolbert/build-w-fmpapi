@@ -1,4 +1,11 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
+# ]
+# ///
 # Ingest historical price JSON files from UC Volume into a bronze Delta table.
 # Source: UC_VOLUME_PATH/historical_prices/{TICKER}/{ts}_prices.json
 # Output: {UC_CATALOG}.{UC_SCHEMA}.bronze_historical_prices
@@ -20,20 +27,13 @@ from pyspark.sql.functions import col
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_historical_prices (
+        symbol           STRING,
         date             DATE,
-        open             DOUBLE,
-        high             DOUBLE,
-        low              DOUBLE,
-        close            DOUBLE,
+        adjOpen          DOUBLE,
+        adjHigh          DOUBLE,
+        adjLow           DOUBLE,
         adjClose         DOUBLE,
         volume           LONG,
-        unadjustedVolume LONG,
-        change           DOUBLE,
-        changePercent    DOUBLE,
-        vwap             DOUBLE,
-        label            STRING,
-        changeOverTime   DOUBLE,
-        symbol           STRING,
         ingested_at      STRING
     )
     USING DELTA
