@@ -80,9 +80,11 @@ for suffix, table in [
     ("financial_ratios", "bronze_financial_ratios"),
 ]:
     path = f"{base}/*/*_{suffix}.json"
+    target_schema = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.{table}").schema
     df = (
         spark.read
             .option("multiline", "true")
+            .schema(target_schema)
             .json(path)
             .withColumn("date", col("date").cast("date"))
     )
@@ -91,4 +93,4 @@ for suffix, table in [
 
 # COMMAND ----------
 
-display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_key_metrics").orderBy("symbol", "date"))
+schema(target_schema)
