@@ -89,7 +89,9 @@ print(f"Columns available from edgartools: {list(raw.columns)}")
 raw["period_end"] = pd.to_datetime(raw["period_end"])
 
 if "fiscal_year" in raw.columns:
-    raw["year"] = raw["fiscal_year"].astype(str).str.extract(r"(\d{4})").astype(int)
+    extracted = raw["fiscal_year"].astype(str).str.extract(r"(\d{4})")[0]
+    fallback = raw["period_end"].dt.year
+    raw["year"] = extracted.fillna(fallback.astype(str)).astype(int)
 else:
     raw["year"] = raw["period_end"].dt.year
 

@@ -1,7 +1,7 @@
-# Demo Data Sources
+# Data Sources
 
-**Goldman EBC 5/12/26 — Art of the Possible**  
-**Source:** Financial Modeling Prep (FMP) API + SEC EDGAR + Synthetic (Faker)
+**Goldman EBC — Art of the Possible**  
+**Sources:** Financial Modeling Prep (FMP) API · SEC EDGAR (edgartools) · Synthetic (Faker)
 
 ---
 
@@ -11,460 +11,639 @@ Data for this demo falls into three layers:
 
 | Layer | Source | Rationale |
 |---|---|---|
-| **Unstructured Documents** | Real — SEC EDGAR / FMP | Real financial jargon makes citation features credible. LLM extracts genuine covenant language, not fake text. |
-| **Market & Financial Data** | Real — FMP API | Live prices, ratios, and transcripts for the same BDC names used in documents. |
-| **Client & Portfolio Intelligence** | Synthetic — Python Faker + notebooks | No public source for client IPS targets, holdings allocations, or advisor tone. Generated as Delta tables and registered in Unity Catalog. |
+| **Market & Financial Data** | Real — FMP API (11 notebooks) | Live prices, ratios, filings, and transcripts for real securities. LLM extracts genuine covenant language, real management tone, real earnings numbers. |
+| **BDC Early-Warning Signals** | Real — SEC EDGAR via XBRL (1 notebook) | Direct XBRL parsing of 10-K/10-Q filings for 17 BDCs. Produces PIK, NII, NAV/share, and unrealized depreciation time series — the early-warning layer for private credit risk. |
+| **Client & Portfolio Intelligence** | Synthetic — Python Faker + notebooks | No public source for client IPS targets, holdings allocations, or advisor communication style. Generated as Delta tables in Unity Catalog. |
 
-**Anchor securities for the demo:** Apollo Investment Corp (`AINV`) and Oaktree Specialty Lending (`OCSL`) are the two named private credit vehicles. All document intelligence and covenant detection is built around these tickers.
-
----
-
-## Part 1 — Real Unstructured Data (Document Intelligence Layer)
-
-Stored as PDFs or plain text files in a **Unity Catalog Volume** (e.g., `uc.wealth.documents`).
+**Securities in scope (full load):** ~60 equities across 7 sectors, 31 ETFs (broad market, fixed income, sector, international, commodities), and 16 BDCs. Configurable via `LIMITED_LOAD` widget. All tickers are defined as the single source of truth in `utils/ingest_config.py → TICKER_CONFIG`.
 
 ---
 
-### D1. Quarterly Financial Filings (10-Q, 8-K)
+## Part 1 — FMP API Data (`pull_data/1_FMAPI/`)
 
-**Source:** SEC EDGAR directly or via FMP `/stable/sec-filings` endpoint  
-**Tickers:** `AINV` (Apollo Investment Corp), `OCSL` (Oaktree Specialty Lending)  
-**Primary Key:** `ticker` + `filing_type` + `period_of_report`
+All FMP notebooks share the same config pattern: they `%run ../../utils/ingest_config` to receive ticker lists, UC Volume paths, and a pre-authenticated `FMPClient` instance. Rate-limit handling (3 retries, 1.5s backoff on HTTP 429) is built into the client.
 
-| Field | Description |
-|---|---|
-| `ticker` | Issuer symbol |
-| `filing_type` | 10-Q or 8-K |
-| `period_of_report` | Quarter end date |
-| `filing_date` | Date filed with SEC |
-| `document_url` | Direct link to full filing text |
-| `raw_text` / `pdf_path` | Local path in UC Volume |
-
-**Why it matters:** These are the source documents the Research Agent (Agent 1) processes. BDC 10-Qs contain loan-level schedules that explicitly state borrower names, principal outstanding, interest rates, and fair value marks — the raw material for covenant headroom extraction. 8-Ks carry material events (non-accrual designations, PIK toggles) that trigger the agent chain.
+**Base URLs:**
+- Stable API: `https://financialmodelingprep.com/stable`
+- v3 API: `https://financialmodelingprep.com/api/v3`
 
 ---
 
-### D2. Credit Agreements / CIMs
+### F1. Company Profiles (`01_company_profiles.py`)
 
-**Source:** Real redacted credit agreements or sample loan documents  
-**Primary Key:** `agreement_id` + `borrower_name`
+**Endpoint:** `GET /stable/profile`  
+**Query params:** `symbol={ticker}`, `apikey={key}`  
+**Ticker scope:** `EQUITY_TICKERS` (all equities + BDCs, respects `LIMITED_LOAD`)  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/company_profiles/{TICKER}/{YYYY_MM_DD_HH}_profile.json`  
+**Idempotency:** 30-day file recency check (no log table) — skips re-fetch if file is < 30 days old  
+**Refresh config:** `full_refresh: True` (wipes directory on each refresh run)
 
-| Field | Description |
-|---|---|
-| `agreement_id` | Internal document identifier |
-| `borrower_name` | Portfolio company name |
-| `facility_type` | Term Loan B, Revolver, Second Lien |
-| `document_date` | Agreement execution date |
-| `covenant_clause_text` | Raw clause text, e.g. "Maximum Total Debt to EBITDA shall not exceed 3.50 to 1.00" |
-| `pdf_path` | UC Volume path |
+**Response schema — array[0]:**
 
-**Why it matters:** CIMs and credit agreements are where explicit numeric covenant thresholds live. The advisor clicking into a private credit position should see: "Covenant limit: 3.50x — current: 3.20x — headroom: 0.30x" with the actual clause text citation-linked. Real documents make this completely credible.
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | Ticker symbol |
+| `companyName` | string | Legal entity name |
+| `price` | float | Current market price |
+| `mktCap` | float | Market capitalization |
+| `beta` | float | Market beta |
+| `sector` | string | GICS sector (e.g., "Financial Services") |
+| `industry` | string | GICS industry sub-sector |
+| `description` | string | Business description (multi-paragraph) |
+| `ceo` | string | CEO name |
+| `country` | string | Country code |
+| `exchangeShortName` | string | Listing exchange (e.g., "NYSE") |
+| `dcf` | float | DCF intrinsic value estimate |
+| `isEtf` | boolean | ETF flag |
+| `cik` | string | SEC CIK (10-digit, zero-padded) |
 
----
+**Derived fields added:** `ingested_at` (ISO 8601 timestamp)
 
-### D3. Earnings Call Transcripts (Document Store)
-
-**Source:** FMP API — `GET /stable/earning-call-transcript?symbol={ticker}&year={year}&quarter={quarter}`  
-**Tickers:** `AINV`, `OCSL`  
-**Primary Key:** `symbol` + `year` + `quarter`
-
-| Field | Description |
-|---|---|
-| `symbol` | Ticker |
-| `quarter` / `year` | Earnings period |
-| `date` | Call date |
-| `content` | Full transcript text |
-
-**Why it matters:** Powers the "Management Tone" sentiment analysis. The delta between two consecutive transcripts — tone shifting from "comfortable liquidity position" to "monitoring select credits closely" — is the signal the system extracts and presents to the advisor. 1–2 recent transcripts per fund are sufficient.
-
----
-
-## Part 2 — Real Market & Financial Data (FMP API)
-
-All endpoints are keyed by `symbol` (ticker). Base URL: `https://financialmodelingprep.com/stable/`
+**Why it matters:** Foundation record for every holding card in the dashboard. `cik` is also the lookup key used by the EDGAR early-warning notebook to fetch XBRL filings without a manual CIK mapping.
 
 ---
 
-### F1. Company Profile
+### F2. Historical Prices (`02_historical_prices.py`)
 
-**Endpoint:** `GET /stable/profile?symbol={ticker}`  
-**Primary Key:** `symbol`  
-**Demo Component:** Portfolio Intelligence Dashboard — holding cards, asset master
+**Endpoint:** `GET /stable/historical-price-eod/dividend-adjusted`  
+**Query params:** `symbol={ticker}`, `from={HISTORY_START_DATE}`, `to={today}`, `apikey={key}`  
+**Ticker scope:** `EQUITY_TICKERS`  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/historical_prices/{TICKER}/{YYYY_MM_DD_HH}_prices.json`  
+**Idempotency:** Full refresh — overwrites on every run  
+**Refresh config:** `full_refresh: True`
 
-| Field | Description |
-|---|---|
-| `symbol` / `companyName` | Ticker and legal name |
-| `price` | Current market price |
-| `mktCap` | Market capitalization |
-| `beta` | Market volatility |
-| `sector` / `industry` | Classification |
-| `description` | Business description |
-| `ceo` | Chief Executive |
-| `country` / `exchangeShortName` | Domicile and exchange |
-| `dcf` | DCF intrinsic value estimate |
-| `isEtf` | ETF flag |
+**Response schema — `response["historical"]` array:**
 
-**Why it matters:** Foundation record for every displayed holding. Provides the name, sector bucket, and intrinsic value used in the bento grid cards.
+| Field | Type | Description |
+|---|---|---|
+| `date` | string (YYYY-MM-DD) | Trading date |
+| `open` | float | Open price |
+| `high` | float | Intraday high |
+| `low` | float | Intraday low |
+| `close` | float | Close price |
+| `adjClose` | float | Dividend-adjusted close |
+| `volume` | integer | Shares traded |
+| `change` | float | Absolute price change vs. prior close |
+| `changePercent` | float | Daily % change |
+| `changeOverTime` | float | Cumulative return from `from` date (decimal) |
 
----
+**Derived fields added:** `symbol` (ticker), `ingested_at`
 
-### F2. Historical Price Data
-
-**Endpoint:** `GET /stable/historical-price-eod/{symbol}?from={date}&to={date}`  
-**Primary Key:** `symbol` + `date`  
-**Demo Component:** Portfolio Intelligence Dashboard — YTD Alpha, performance vs. benchmark
-
-| Field | Description |
-|---|---|
-| `date` | Trading date |
-| `open` / `high` / `low` / `close` | OHLC |
-| `adjClose` | Adjusted close |
-| `volume` | Shares traded |
-| `changePercent` | Daily % change |
-| `changeOverTime` | Cumulative return from base date |
-
-**Why it matters:** `changeOverTime` drives YTD Alpha when compared against a benchmark return series (e.g., S&P 500 via `SPY`). Also populates the time-series performance chart behind each holding card.
+**Why it matters:** `changeOverTime` is the raw input for YTD Alpha when differenced against the `^GSPC` benchmark series from the same start date. Used to populate per-holding performance charts and the top-level Alpha KPI.
 
 ---
 
-### F3. Income Statement
+### F3. Financial Statements (`03_financials.py`)
 
-**Endpoint:** `GET /stable/income-statement?symbol={ticker}&period=annual&limit=5`  
-**Primary Key:** `symbol` + `date` + `period`  
-**Demo Component:** Document Intelligence Layer — KPI extraction, revenue delta
-
-| Field | Description |
-|---|---|
-| `date` / `period` | Report date and period |
-| `revenue` | Total revenue |
-| `ebitda` | EBITDA |
-| `operatingIncome` | Operating income |
-| `netIncome` | Net income |
-| `eps` / `epsDiluted` | Earnings per share |
-| `interestExpense` | Interest expense (covenant input) |
-| `grossProfitRatio` | Gross margin |
-
-**Why it matters:** EBITDA is the denominator of the most common leverage covenant (Net Debt / EBITDA). Quarterly EBITDA trend from this table, combined with debt from the balance sheet, produces the `covenant_headroom` value the system monitors.
-
----
-
-### F4. Balance Sheet
-
-**Endpoint:** `GET /stable/balance-sheet-statement?symbol={ticker}&period=annual&limit=5`  
-**Primary Key:** `symbol` + `date` + `period`  
-**Demo Component:** Document Intelligence Layer — net leverage, covenant breach detection
-
-| Field | Description |
-|---|---|
-| `totalDebt` | Total debt |
-| `netDebt` | Net debt (debt minus cash) |
-| `longTermDebt` | Long-term debt |
-| `cashAndCashEquivalents` | Cash on hand |
-| `totalAssets` / `totalLiabilities` | Balance totals |
-| `totalStockholdersEquity` | Book equity |
-| `goodwillAndIntangibleAssets` | Goodwill |
-| `retainedEarnings` | Retained earnings |
-
-**Why it matters:** `netDebt / EBITDA` is the live covenant metric. Fetching this quarterly for `AINV` and `OCSL` lets the agent reconstruct "headroom compressed from 0.7x to 0.3x" using real reported figures.
-
----
-
-### F5. Cash Flow Statement
-
-**Endpoint:** `GET /stable/cash-flow-statement?symbol={ticker}&period=annual&limit=5`  
-**Primary Key:** `symbol` + `date` + `period`  
-**Demo Component:** Document Intelligence Layer — DSCR, interest coverage proxy
-
-| Field | Description |
-|---|---|
-| `operatingCashFlow` | Cash from operations |
-| `freeCashFlow` | FCF (operating CF minus capex) |
-| `capitalExpenditure` | Capex |
-| `depreciationAndAmortization` | D&A |
-| `dividendsPaid` | Dividends |
-| `netCashUsedForInvestingActivities` | Investment activity |
-
-**Why it matters:** Free cash flow relative to debt service gives a proxy DSCR. Declining FCF ahead of a debt maturity is a secondary early-warning signal the Research Agent surfaces alongside the leverage ratio.
-
----
-
-### F6. Key Metrics
-
-**Endpoint:** `GET /stable/key-metrics?symbol={ticker}&period=annual&limit=5`  
-**Primary Key:** `symbol` + `date` + `period`  
-**Demo Component:** Portfolio Dashboard risk panel; Agent 1 threshold scanning
-
-| Field | Description |
-|---|---|
-| `netDebtToEBITDA` | **Primary covenant proxy** |
-| `interestCoverage` | **Secondary covenant proxy (DSCR input)** |
-| `debtToEquity` | Leverage ratio |
-| `currentRatio` | Liquidity |
-| `peRatio` | Valuation |
-| `marketCap` / `enterpriseValue` | Size |
-| `freeCashFlowPerShare` | FCF per share |
-| `dividendYield` | Yield |
-| `earningsYield` | Inverse P/E |
-
-**Why it matters:** `netDebtToEBITDA` and `interestCoverage` are pre-computed here — Agent 1 can scan all holdings for these crossing alert thresholds in a single query without doing raw statement math. This is the trigger for the full multi-agent chain.
-
----
-
-### F7. Financial Ratios
-
-**Endpoint:** `GET /stable/ratios?symbol={ticker}&period=annual&limit=5`  
-**Primary Key:** `symbol` + `date` + `period`  
-**Demo Component:** Portfolio Dashboard — allocation drift flags, risk tier classification
-
-| Field | Description |
-|---|---|
-| `netProfitMargin` / `grossProfitMargin` | Profitability |
-| `returnOnEquity` / `returnOnAssets` | ROE, ROA |
-| `debtRatio` / `debtEquityRatio` | Leverage |
-| `currentRatio` / `quickRatio` | Liquidity |
-| `priceEarningsRatio` / `priceToBookRatio` | Valuation multiples |
-| `enterpriseValueMultiple` | EV/EBITDA |
-| `operatingProfitMargin` | Operational efficiency |
-
-**Why it matters:** Cross-holding ratio comparison enables the bento grid's risk-tier color coding. Deteriorating margins or rising leverage flag positions for advisor review before they become client-visible problems.
-
----
-
-### F8. SEC Filings (Links & Metadata)
-
-**Endpoint:** `GET /stable/sec-filings?symbol={ticker}&type=10-Q` (also `10-K`, `8-K`)  
-**Primary Key:** `symbol` + `fillingDate` + `type`  
-**Demo Component:** Document Intelligence Layer — filing ingestion trigger, material event detection
-
-| Field | Description |
-|---|---|
-| `symbol` | Ticker |
-| `fillingDate` / `acceptedDate` | Filing timestamps |
-| `cik` | SEC CIK number |
-| `type` | Filing type |
-| `link` | EDGAR HTML link |
-| `finalLink` | **Direct document URL for download and chunking** |
-
-**Why it matters:** `finalLink` is what the ingestion pipeline uses to fetch and embed document chunks into the Unity Catalog Volume. 8-Ks are the real-time trigger — when `AINV` or `OCSL` files an 8-K flagging a non-accrual designation, Agent 1 fires immediately.
-
----
-
-### F9. ETF Information
-
-**Endpoint:** `GET /stable/etf-info?symbol={ticker}`  
-**Primary Key:** `symbol` (e.g. `SPY`, `AGG`, `BKLN`, `HYG`)  
-**Demo Component:** Portfolio Dashboard — ETF positions panel, benchmark data
-
-| Field | Description |
-|---|---|
-| `symbol` / `name` | ETF identifier and name |
-| `description` | Fund mandate |
-| `expenseRatio` | Annual fee |
-| `aum` | AUM |
-| `ytdReturn` / `oneYearReturn` / `threeYearReturn` | Performance |
-| `sectorsList` | Top sector exposures |
-| `holdingsCount` | Underlying positions count |
-
-**Why it matters:** ETFs appear as a first-class asset class in the portfolio. Performance fields (`ytdReturn`) feed the top-line AUM and Revenue Yield KPIs. `SPY` and `AGG` also serve as benchmark series for the YTD Alpha calculation.
-
----
-
-### F10. ETF Holdings
-
-**Endpoint:** `GET /stable/etf-holdings?symbol={ticker}`  
-**Primary Key:** ETF `symbol` → underlying `asset`  
-**Demo Component:** Portfolio Dashboard — ETF drill-down, look-through concentration risk
-
-| Field | Description |
-|---|---|
-| `asset` | Underlying holding ticker |
-| `name` | Holding name |
-| `isin` / `cusip` | Security identifiers |
-| `weightPercentage` | Portfolio weight |
-| `marketValue` | Dollar value |
-
-**Why it matters:** Look-through exposure: if a client holds two ETFs that both contain the same issuer, the system aggregates the real exposure. This is what powers the "top client concentration risks" metric at the top of the dashboard.
-
----
-
-### F11. ETF Sector Weighting
-
-**Endpoint:** `GET /stable/etf-sector-weightings?symbol={ticker}`  
-**Primary Key:** ETF `symbol` + `sector`  
-**Demo Component:** Portfolio Dashboard — allocation drift vs. IPS targets
-
-| Field | Description |
-|---|---|
-| `sector` | Sector name |
-| `weightPercentage` | Allocation % |
-
-**Why it matters:** When a client's IPS specifies a 20% technology cap and ETF sector weights push them over, this table surfaces the drift. Joins directly to the synthetic `client_ips_targets` table.
-
----
-
-### F12. Analyst Estimates
-
-**Endpoint:** `GET /stable/analyst-estimates?symbol={ticker}`  
-**Primary Key:** `symbol` + `date`  
-**Demo Component:** Document Intelligence Layer — forward covenant projection
-
-| Field | Description |
-|---|---|
-| `estimatedEbitdaLow` / `Avg` / `High` | EBITDA forecast range |
-| `estimatedRevenueLow` / `Avg` / `High` | Revenue forecast range |
-| `estimatedEpsLow` / `Avg` / `High` | EPS forecast |
-| `numberAnalystEstimatedRevenue` | Analyst count |
-
-**Why it matters:** Forward EBITDA estimates project covenant headroom 2–4 quarters out. If consensus EBITDA is declining while total debt is fixed, the agent can flag a future breach before it appears in any filing.
-
----
-
-### F13. Price Target Consensus
-
-**Endpoint:** `GET /stable/price-target-consensus?symbol={ticker}`  
-**Primary Key:** `symbol`  
-**Demo Component:** Portfolio Dashboard — upside/downside to target on holding cards
-
-| Field | Description |
-|---|---|
-| `targetHigh` / `targetLow` | Bull/bear price targets |
-| `targetConsensus` | Mean analyst target |
-| `targetMedian` | Median target |
-
-**Why it matters:** "Upside to target" appears in the holding card tooltip. When a position has fallen significantly below consensus target after a covenant event, the system flags it as a potential add opportunity for the re-allocation scenario Agent 3 drafts.
-
----
-
-### F14. Analyst Ratings
-
-**Endpoint:** `GET /stable/grades-summary?symbol={ticker}`  
-**Primary Key:** `symbol`  
-**Demo Component:** Portfolio Dashboard — rating badge; Agent 1 secondary signal
-
-| Field | Description |
-|---|---|
-| `strongBuy` / `buy` / `hold` / `sell` / `strongSell` | Count of ratings |
-| `consensus` | Overall label |
-
-**Why it matters:** A concurrent analyst downgrade alongside a deteriorating covenant metric is a compounding signal. The agent surfaces both together in its alert, not just the covenant number.
-
----
-
-### F15. Stock News
-
-**Endpoint:** `GET /stable/stock-news?symbol={ticker}&limit=50`  
-**Primary Key:** `symbol` + `publishedDate`  
-**Demo Component:** Portfolio Dashboard — news feed; Agent 1 signal enrichment
-
-| Field | Description |
-|---|---|
-| `publishedDate` | Timestamp |
-| `title` | Headline |
-| `text` | Article snippet |
-| `site` | Source publication |
-| `url` | Full article link |
-
-**Why it matters:** News events complement filing-based signals and can precede an 8-K. Headlines are citation-linked in the advisor workspace alongside the document paragraphs. The agent includes relevant recent headlines in its client alert draft.
-
----
-
-### F16. Index Quotes (DOW, NASDAQ, S&P 500)
-
-**Endpoint:** `GET /api/v3/quote/^DJI,^GSPC,^IXIC ^VIX`  
-**Primary Key:** `symbol` — `^DJI` (Dow Jones), `^GSPC` (S&P 500), `^IXIC` (Nasdaq Composite)  
-**Demo Component:** Portfolio Intelligence Dashboard — market context header bar
-
-| Field | Description |
-|---|---|
-| `symbol` | Index identifier (`^DJI`, `^GSPC`, `^IXIC`,`^VIX`) |
-| `name` | Full index name |
-| `price` | Current index level |
-| `change` | Absolute point change |
-| `changesPercentage` | Percentage change |
-| `dayHigh` / `dayLow` | Intraday range |
-| `52WeekHigh` / `52WeekLow` | 52-week range |
-| `open` / `previousClose` | Session open and prior close |
-| `volume` | Session volume |
-| `timestamp` | Quote timestamp |
-
-**Why it matters:** The dashboard header shows the three major indices as market context — the advisor sees at a glance whether today's portfolio movements are idiosyncratic or driven by broad market conditions. A covenant-breach alert landing on a down-market day reads very differently than one on a flat day.
-
----
-
-### F17. Historical Index Prices (DOW, NASDAQ, S&P 500)
-
-**Endpoint:** `GET /api/v3/historical-price-full/{symbol}?from={date}&to={date}`  
-**Symbols:** `^GSPC`, `^DJI`, `^IXIC`,`^VIX`  
-**Primary Key:** `symbol` + `date`  
-**Demo Component:** Portfolio Intelligence Dashboard — YTD Alpha benchmark series; performance chart overlays
-
-| Field | Description |
-|---|---|
-| `date` | Trading date |
-| `open` / `high` / `low` / `close` | OHLC |
-| `volume` | Session volume |
-| `change` | Absolute point change |
-| `changePercent` | Daily % change |
-| `vwap` | Volume-weighted average price |
-
-**Why it matters:** This is the authoritative benchmark series for YTD Alpha. Each holding's `changeOverTime` (from F2) is compared against `^GSPC` `changeOverTime` from the same start date to compute basis-point alpha. The S&P 500 series also overlays on the portfolio performance chart so the advisor can see exactly where they outran or lagged the market.
-
----
-
-### F18. VIX (Cboe Volatility Index)
-
-**Endpoint:** `GET /api/v3/quote/%5EVIX` (real-time) and `GET /api/v3/historical-price-full/%5EVIX` (historical)  
-**Primary Key:** `symbol` (`^VIX`) + `date` for historical  
-**Demo Component:** Portfolio Intelligence Dashboard — market stress indicator; risk context for agent alerts
-
-| Field | Description |
-|---|---|
-| `symbol` | `^VIX` |
-| `price` | Current VIX level |
-| `change` / `changesPercentage` | Daily move |
-| `dayHigh` / `dayLow` | Intraday range |
-| `52WeekHigh` / `52WeekLow` | Annual range |
-| `date` | For historical series |
-| `close` | Daily VIX close (historical) |
-
-**Why it matters:** VIX above 20 is a market stress regime — the same covenant headroom number carries different urgency at VIX 15 vs. VIX 30. The agent alert drafted for UHNW clients includes market context ("amid elevated volatility…") that is grounded in the live VIX level, making the communication feel timely and professionally calibrated rather than generic. Note: FMP does not have a dedicated VIX endpoint; `^VIX` is accessed via the standard index quote and historical price endpoints.
-
----
-
-### F19. Index Constituents (S&P 500, Nasdaq 100, Dow Jones)
+Six endpoints called per ticker — quarterly, 24 periods each (~6 years).
 
 **Endpoints:**
-- `GET /api/v3/sp500_constituent`
-- `GET /api/v3/nasdaq_constituent`
-- `GET /api/v3/dowjones_constituent`
 
-**Primary Key:** `symbol`  
-**Demo Component:** Portfolio Intelligence Dashboard — index membership badge on holding cards; concentration risk analysis
+| Call | Endpoint | Output filename |
+|---|---|---|
+| Income Statement | `GET /stable/income-statement?period=quarterly&limit=24` | `{ts}_income_statements.json` |
+| Balance Sheet | `GET /stable/balance-sheet-statement?period=quarterly&limit=24` | `{ts}_balance_sheets.json` |
+| Cash Flow | `GET /stable/cash-flow-statement?period=quarterly&limit=24` | `{ts}_cash_flows.json` |
+| Income Growth | `GET /stable/income-statement-growth?period=quarterly&limit=24` | `{ts}_income_growth.json` |
+| Balance Growth | `GET /stable/balance-sheet-statement-growth?period=quarterly&limit=24` | `{ts}_balance_growth.json` |
+| Cash Flow Growth | `GET /stable/cash-flow-statement-growth?period=quarterly&limit=24` | `{ts}_cashflow_growth.json` |
 
-| Field | Description |
-|---|---|
-| `symbol` | Stock ticker |
-| `companyName` | Full company name |
-| `sector` | GICS sector |
-| `subSector` | GICS sub-sector |
-| `headQuarter` | Headquarters location |
-| `dateAdded` | Date added to index |
-| `cik` | SEC CIK number |
+**Ticker scope:** `EQUITY_TICKERS`  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/financials/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
+**Idempotency:** Full refresh  
+**Refresh config:** `full_refresh: True`
 
-**Why it matters:** Knowing which holdings are S&P 500 constituents enables two things: (1) an index-membership badge on the holding card ("S&P 500 component") which is a quality signal for UHNW clients, and (2) look-through concentration analysis — if a client's ETF holdings plus direct equity holdings overweight a single S&P 500 sector, the system flags it against the IPS sector cap.
+**Income Statement schema (array of period objects):**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string (YYYY-MM-DD) | Period end date |
+| `period` | string | "Q1", "Q2", "Q3", "Q4" |
+| `revenue` | float | Total revenue |
+| `ebitda` | float | **Leverage covenant denominator** |
+| `operatingIncome` | float | EBIT |
+| `netIncome` | float | Net income |
+| `eps` | float | Basic EPS |
+| `epsDiluted` | float | Diluted EPS |
+| `interestExpense` | float | **Interest coverage input** |
+| `grossProfit` | float | Gross profit |
+| `grossProfitRatio` | float | Gross margin |
+| `costOfRevenue` | float | COGS |
+| `operatingExpenses` | float | Total opex |
+
+**Balance Sheet schema (key fields):**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string | Period end date |
+| `totalAssets` | float | Total assets |
+| `totalLiabilities` | float | Total liabilities |
+| `totalStockholdersEquity` | float | Book equity |
+| `cashAndCashEquivalents` | float | Cash |
+| `totalDebt` | float | Total debt (short + long) |
+| `longTermDebt` | float | Long-term debt |
+| `shortTermDebt` | float | Current portion of LTD |
+| `netDebt` | float | **Total debt minus cash — covenant numerator** |
+| `goodwillAndIntangibleAssets` | float | Goodwill + intangibles |
+| `retainedEarnings` | float | Retained earnings |
+
+**Cash Flow schema (key fields):**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string | Period end date |
+| `operatingCashFlow` | float | Cash from operations |
+| `capitalExpenditure` | float | Capex (negative) |
+| `freeCashFlow` | float | **Operating CF + Capex — DSCR proxy input** |
+| `depreciationAndAmortization` | float | D&A |
+| `dividendsPaid` | float | Dividends paid |
+
+**Growth statements:** Same field structure as their base statements but values are YoY % changes (e.g., `revenueGrowth`, `ebitdaGrowth`, `netDebtGrowth`).
+
+**Derived fields added:** `symbol`, `ingested_at`
 
 ---
 
-## Part 3 — Synthetic Structured Data (Client & Portfolio Intelligence)
+### F4. Key Metrics & Financial Ratios (`04_key_metrics.py`)
 
-Generated using Python Faker in Databricks notebooks. Registered in Unity Catalog under `uc.wealth.*`.
+Two endpoints per ticker, 24 quarterly periods each.
+
+**Endpoints:**
+
+| Call | Endpoint | Output filename |
+|---|---|---|
+| Key Metrics | `GET /stable/key-metrics?period=quarterly&limit=24` | `{ts}_key_metrics.json` |
+| Ratios | `GET /stable/ratios?period=quarterly&limit=24` | `{ts}_financial_ratios.json` |
+
+**Ticker scope:** `EQUITY_TICKERS`  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/key_metrics/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
+**Idempotency:** Full refresh  
+**Refresh config:** `full_refresh: True`
+
+**Key Metrics schema (key fields):**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string | Period end date |
+| `period` | string | Quarter |
+| `netDebtToEBITDA` | float | **Primary leverage covenant proxy** |
+| `interestCoverage` | float | **EBIT / Interest expense — secondary covenant proxy** |
+| `debtToEquity` | float | Leverage ratio |
+| `currentRatio` | float | Current assets / current liabilities |
+| `quickRatio` | float | (Current assets − inventory) / current liabilities |
+| `peRatio` | float | Price-to-earnings |
+| `priceToBooksRatio` | float | Price-to-book |
+| `earningsYield` | float | Inverse P/E |
+| `freeCashFlowPerShare` | float | FCF per share |
+| `dividendYield` | float | Dividend yield |
+| `enterpriseValue` | float | EV |
+| `marketCap` | float | Market cap |
+
+**Financial Ratios schema (key fields):**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string | Period end date |
+| `netProfitMargin` | float | Net income / revenue |
+| `grossProfitMargin` | float | Gross profit / revenue |
+| `operatingProfitMargin` | float | EBIT / revenue |
+| `returnOnAssets` | float | ROA |
+| `returnOnEquity` | float | ROE |
+| `debtRatio` | float | Total debt / total assets |
+| `interestCoverage` | float | EBIT / interest expense |
+| `enterpriseValueMultiple` | float | EV / EBITDA |
+| `operatingCashFlowRatio` | float | Operating CF / current liabilities |
+
+**Derived fields added:** `symbol`, `ingested_at`
+
+**Why it matters:** `netDebtToEBITDA` and `interestCoverage` are pre-computed here — Agent 1 can scan all holdings for covenant threshold breaches in a single query without reconstructing the ratios from raw statements.
 
 ---
 
-### S1. Client CRM (`uc.wealth.clients`)
+### F5. SEC Filings (`05_sec_filings.py`)
+
+**Endpoint:** `GET /stable/sec-filings-search/symbol`  
+**Query params:** `symbol`, `from`, `to`, `page`, `limit=200`, `apikey`  
+**Ticker scope:** All equities + BDCs (from `TICKER_CONFIG` with non-empty `sec_forms`)  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/sec_filings/{form_type_dir}/{TICKER}/{FORM_TYPE}_{filing_date}_{accession}.htm`  
+**Idempotency:** Delta MERGE on `(symbol, accession)` — never re-downloads a fetched filing  
+**Refresh config:** `full_refresh: False` — log table is NOT dropped on re-run  
+**Log table:** `{catalog}.{schema}.sec_filings_log`
+
+**Response schema — array of filing objects:**
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | Ticker |
+| `formType` | string | "10-K", "10-Q", "8-K", "424B2", "424B5" |
+| `filingDate` | string (YYYY-MM-DD) | Date filed with SEC |
+| `acceptedDate` | string (ISO 8601) | SEC acceptance timestamp |
+| `link` | string | Original EDGAR HTML URL |
+| `finalLink` | string | **Canonical document URL — used for HTML download** |
+| `cik` | string | SEC CIK number |
+
+**Pagination:** Fetches up to 100 pages (20,000 filings) but stops early when all target form counts (per `TICKER_CONFIG.sec_forms`) are satisfied or the API returns an empty batch.
+
+**Downloaded file content:** Raw HTML from `finalLink` — the full EDGAR filing document.
+
+**Delta log table schema:**
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `form_type` | STRING | e.g., "10-K" |
+| `accession` | STRING | 18-digit EDGAR accession number |
+| `filing_date` | STRING | YYYY-MM-DD |
+| `link` | STRING | Original FMP link |
+| `final_link` | STRING | Canonical EDGAR document URL |
+| `subdir` | STRING | Form type as directory name (e.g., "10k") |
+| `filename` | STRING | Output .htm filename |
+| `downloaded_at` | TIMESTAMP | When the file was fetched |
+
+**Natural key:** `symbol + accession`
+
+**Form types by ticker:** Configured per-ticker in `TICKER_CONFIG.sec_forms`. Banks/BDCs include 424B2/424B5 (prospectus supplements). All equities get 10-K, 10-Q, 8-K.
+
+**Why it matters:** 8-Ks carry material events (non-accrual designations, PIK toggles) that trigger the agent chain. 10-Qs contain loan-level schedules with borrower names, principal outstanding, interest rates, and fair value marks — the raw material for covenant headroom extraction.
+
+---
+
+### F6. ETF Data (`06_etf_data.py`)
+
+Three endpoints per ETF ticker.
+
+**Endpoints:**
+
+| Call | Endpoint | Output filename |
+|---|---|---|
+| ETF Info | `GET /stable/etf/info` | `{ts}_etf_info.json` |
+| ETF Holdings | `GET /stable/etf/holdings` | `{ts}_etf_holdings.json` |
+| Sector Weightings | `GET /stable/etf/sector-weightings` | `{ts}_etf_sectors.json` |
+
+**Ticker scope:** `ETF_TICKERS` — 31 ETFs: SPY, QQQ, IWM, VTI, VOO, DIA, AGG, TLT, LQD, HYG, JNK, EMB, BIL, SHY, BKLN, XLF, XLK, XLE, XLV, XLI, XLY, XLU, XLP, XLRE, EFA, EEM, VEU, GLD, SLV, DBC, VNQ  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/etf_data/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
+**Idempotency:** Full refresh  
+**Refresh config:** `full_refresh: True`
+
+**ETF Info schema:**
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | ETF ticker |
+| `name` | string | Full fund name |
+| `description` | string | Fund objective/mandate |
+| `aum` | float | Assets under management |
+| `expenseRatio` | float | Annual fee as decimal (e.g., 0.0003) |
+| `ytdReturn` | float | Year-to-date return % |
+| `oneYearReturn` | float | 1-year return % |
+| `threeYearReturn` | float | 3-year return % |
+| `fiveYearReturn` | float | 5-year return % |
+| `holdingsCount` | integer | Number of underlying securities |
+
+**ETF Holdings schema — `response["holdings"]` array:**
+
+| Field | Type | Description |
+|---|---|---|
+| `asset` | string | Underlying security ticker |
+| `name` | string | Security name |
+| `isin` | string | ISIN |
+| `cusip` | string | CUSIP |
+| `weightPercentage` | float | Portfolio weight (%) |
+| `marketValue` | float | Dollar value in ETF |
+| `exchange` | string | Listing exchange |
+
+**Sector Weightings schema:**
+
+| Field | Type | Description |
+|---|---|---|
+| `sector` | string | Sector name |
+| `weightPercentage` | float | Allocation (%) |
+
+**Derived fields added:** `symbol` (or `etf_symbol` for holdings), `ingested_at`
+
+**Why it matters:** Look-through exposure: aggregating ETF holdings across all client positions surfaces real concentration risk. Sector weights join directly to `client_ips_targets` to detect IPS allocation drift (e.g., client's tech cap exceeded because two ETFs both overweight XLK).
+
+---
+
+### F7. Analyst Data (`07_analyst_data.py`)
+
+Three endpoints per ticker.
+
+**Endpoints:**
+
+| Call | Endpoint | Output filename |
+|---|---|---|
+| Analyst Estimates | `GET /stable/analyst-estimates?period=quarterly&limit=25` | `{ts}_analyst_estimates.json` |
+| Price Target Consensus | `GET /stable/price-target-consensus` | `{ts}_price_targets.json` |
+| Grades Consensus | `GET /stable/grades-consensus` | `{ts}_analyst_ratings.json` |
+
+**Ticker scope:** `EQUITY_TICKERS`  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/analyst_data/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
+**Idempotency:** Full refresh  
+**Refresh config:** `full_refresh: True`
+
+**Analyst Estimates schema (array of forward periods):**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string | Estimate as-of date |
+| `period` | string | "Q1", "Q2", etc. |
+| `estimatedRevenueAvg` | float | Consensus revenue forecast |
+| `estimatedRevenueLow` / `High` | float | Bear/bull revenue range |
+| `estimatedEbitdaAvg` | float | **Forward EBITDA — covenant headroom projection** |
+| `estimatedEbitdaLow` / `High` | float | Bear/bull EBITDA range |
+| `estimatedEpsAvg` | float | Consensus EPS |
+| `estimatedEpsLow` / `High` | float | EPS range |
+| `numberAnalystEstimatedRevenue` | integer | Number of estimates |
+
+**Price Target Consensus schema:**
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | Ticker |
+| `targetConsensus` | float | Mean analyst price target |
+| `targetMedian` | float | Median target |
+| `targetHigh` | float | Bull case target |
+| `targetLow` | float | Bear case target |
+| `analystCount` | integer | Number of analysts |
+| `lastUpdate` | string | Last update timestamp |
+
+**Grades Consensus schema:**
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | Ticker |
+| `strongBuy` / `buy` / `hold` / `sell` / `strongSell` | integer | Analyst counts per rating |
+| `consensus` | string | Overall label (e.g., "Buy", "Hold") |
+
+**Derived fields added:** `symbol`, `ingested_at`
+
+**Why it matters:** Forward EBITDA estimates project covenant headroom 2–4 quarters out. If consensus EBITDA is declining while total debt is flat, the agent can flag a future breach before it appears in any filing. A concurrent analyst downgrade alongside deteriorating covenant metrics is a compounding signal that Agent 1 surfaces together.
+
+---
+
+### F8. Stock News (`08_news.py`)
+
+**Endpoint:** `GET /stable/news/stock`  
+**Query params:** `symbol`, `from` (first of current month), `to` (today), `limit=50`, `apikey`  
+**Secondary fetch:** Full article text scraped from `url` via `fetch_article_text()` (custom HTTP downloader)  
+**Ticker scope:** `EQUITY_TICKERS`  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/stock_news/{TICKER}/{YYYY-MM-DD}_{8-char-md5}.json`  
+**Idempotency:** Delta MERGE on `(symbol, url)` — retries errors, skips prior successes  
+**Refresh config:** `full_refresh: False`  
+**Log table:** `{catalog}.{schema}.stock_news_log`
+
+**FMP response schema — array of article objects:**
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | string | Article hyperlink |
+| `title` | string | Headline |
+| `text` | string | Article snippet (~100–200 words) |
+| `publishedDate` | string | Publication timestamp |
+| `symbol` | string | Ticker |
+| `site` | string | Publication name |
+| `sentiment` | string | Sentiment label (optional) |
+
+**Output JSON file schema (merged fields):**
+
+| Field | Source | Description |
+|---|---|---|
+| `symbol` | derived | Ticker |
+| `url` | FMP | Article URL |
+| `publishedDate` | FMP | Publish timestamp |
+| `title` | FMP | Headline |
+| `summary` | FMP (`text`) | Article snippet (renamed) |
+| `full_text` | web-scraped | Full article body |
+| `site` | FMP | Publication name |
+| `sentiment` | FMP | Sentiment label |
+| `ingested_at` | derived | Fetch timestamp |
+
+**Delta log table schema:**
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `url` | STRING | Article URL |
+| `published_date` | STRING | YYYY-MM-DD |
+| `filename` | STRING | Output JSON filename (NULL if error) |
+| `fetch_status` | STRING | "success" or "error" |
+| `error_message` | STRING | NULL if success, error text if failed |
+| `downloaded_at` | TIMESTAMP | Attempt timestamp |
+
+**Natural key:** `symbol + url`
+
+**Why it matters:** News events can precede 8-K filings. Headlines are citation-linked in the advisor workspace alongside document paragraphs. Agent 3 includes relevant recent headlines in client alert drafts for market context.
+
+---
+
+### F9. Indexes & VIX (`09_indexes_and_vix.py`)
+
+**Endpoint:** `GET /stable/historical-price-eod/full`  
+**Query params:** `symbol`, `from={HISTORY_START_DATE}`, `to={today}`, `apikey`  
+**Symbols:** `^GSPC` (S&P 500), `^DJI` (Dow Jones), `^IXIC` (Nasdaq), `^VIX` (volatility) — from `INDEX_SYMBOLS` + `VIX_SYMBOL` in `ingest_config`  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/indexes/{SYMBOL_CLEAN}/{YYYY_MM_DD_HH}_history.json` (symbol cleaned: `^` removed)  
+**Idempotency:** Full refresh  
+**Refresh config:** `full_refresh: True`
+
+**Response schema — `response["historical"]` array:**
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | string (YYYY-MM-DD) | Trading date |
+| `open` | float | Open |
+| `high` | float | Intraday high |
+| `low` | float | Intraday low |
+| `close` | float | Close |
+| `volume` | integer | Session volume |
+| `change` | float | Absolute point change |
+| `changePercent` | float | Daily % change |
+
+**Derived fields added:** `symbol` (with `^` prefix), `ingested_at`
+
+**Why it matters:** `^GSPC` `close` series is the authoritative benchmark for YTD Alpha calculations. VIX level provides market stress context — the same covenant headroom number carries different urgency at VIX 15 vs. VIX 30. Both are embedded in agent-drafted client alerts.
+
+---
+
+### F10. Earnings Call Transcripts (`10_transcripts.py`)
+
+**Endpoint:** `GET /stable/earning-call-transcript`  
+**Query params:** `symbol`, `year={year}`, `quarter={1|2|3|4}`, `apikey`  
+**Ticker scope:** `get_tickers()` — all tickers respecting `LIMITED_LOAD` (intended: BDC/private credit focus)  
+**Periods fetched:** Last 8 quarters (2 years) — current year + prior year, Q1–Q4  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/transcripts/{TICKER}/Q{quarter}_{year}.json`  
+**Idempotency:** Delta MERGE on `(symbol, year, quarter)`  
+**Refresh config:** `full_refresh: False`  
+**Log table:** `{catalog}.{schema}.transcripts_log`
+
+**Response schema:**
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | Ticker |
+| `date` | string (YYYY-MM-DD) | Earnings call date |
+| `quarter` | integer | 1–4 |
+| `year` | integer | Fiscal year |
+| `title` | string | Call title/description |
+| `content` | string | **Full transcript text** (often 10,000+ words) |
+
+**Delta log table schema:**
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `year` | INT | Fiscal year |
+| `quarter` | INT | Quarter (1–4) |
+| `filename` | STRING | e.g., "Q1_2024.json" |
+| `downloaded_at` | TIMESTAMP | Download timestamp |
+
+**Natural key:** `symbol + year + quarter`
+
+**Why it matters:** Powers "Management Tone" sentiment analysis. The delta between consecutive transcripts — tone shifting from "comfortable liquidity position" to "monitoring select credits closely" — is the signal Agent 1 extracts and presents to the advisor alongside covenant metrics.
+
+---
+
+### F11. Financial Reports JSON (`11_financial_reports.py`)
+
+Two endpoints per ticker — availability check followed by selective report download.
+
+**Endpoints:**
+
+| Call | Endpoint | Purpose |
+|---|---|---|
+| Report Dates | `GET /stable/financial-reports-dates?symbol` | List available periods |
+| Report JSON | `GET /stable/financial-reports-json?symbol&year={FY}&period={FY|Q1..Q4}` | Download full structured report |
+
+**Ticker scope:** `EQUITY_TICKERS`  
+**Periods fetched:** Top 5 most-recent periods per ticker, sorted `(fiscal_year DESC, period_order DESC)` where period order is FY=0 → Q4=4 → Q3=3 → Q2=2 → Q1=1  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/financial_reports/{TICKER}/{fiscal_year}_{period}.json` (e.g., `2024_FY.json`, `2024_Q3.json`)  
+**Idempotency:** Delta MERGE on `(symbol, fiscal_year, period)`  
+**Refresh config:** `full_refresh: False`  
+**Log table:** `{catalog}.{schema}.financial_reports_log`
+
+**Report Dates response schema (array):**
+
+| Field | Type | Description |
+|---|---|---|
+| `fiscalYear` | string | Fiscal year (e.g., "2024") |
+| `period` | string | "FY", "Q1", "Q2", "Q3", "Q4" |
+| `linkJson` | string | URL to structured JSON report |
+| `linkXlsx` | string | URL to XLSX report |
+
+**Financial Reports JSON — top-level structure:**
+
+| Field | Type | Description |
+|---|---|---|
+| `symbol` | string | Ticker |
+| `financialStatements.incomeStatement` | array | Full income statement by period |
+| `financialStatements.balanceSheet` | array | Full balance sheet by period |
+| `financialStatements.cashFlowStatement` | array | Full cash flow by period |
+| `ratios` | object | Pre-computed ratio history |
+| `keyMetrics` | object | Pre-computed key metrics history |
+| `growthRates` | object | YoY growth rates |
+
+**Delta log table schema:**
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `fiscal_year` | STRING | e.g., "2024" |
+| `period` | STRING | e.g., "Q1", "FY" |
+| `link_json` | STRING | FMP JSON report URL |
+| `link_xlsx` | STRING | FMP XLSX report URL |
+| `filename` | STRING | Output filename |
+| `downloaded_at` | TIMESTAMP | Download timestamp |
+
+**Natural key:** `symbol + fiscal_year + period`
+
+**Why it matters:** Pre-parsed structured JSON alternative to raw EDGAR HTML. Enables rapid covenant analysis and structured data extraction without OCR or NLP. The complete multi-period financial statements are consolidated in a single download per reporting period.
+
+---
+
+## Part 2 — SEC EDGAR Data (`pull_data/3_EDGAR/`)
+
+### E1. BDC Early-Warning Signals (`01_bdc_early_warning.py`)
+
+**Primary data source:** SEC EDGAR via `edgartools` Python library (direct XBRL parsing — not FMP)  
+**Secondary source:** FMP `/stable/profile` (to resolve ticker → CIK for tickers not found by name)  
+**Ticker scope:** `BDC_TICKERS` — 16 BDCs: ARCC, MAIN, GBDC, FSK, BXSL, OBDC, HTGC, NMFC, PSEC, SLRC, GSBD, CGBD, AINV, OCSL, TCPC, CSWC  
+**UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/bdc_early_warning/` (full directory cleared on every run)  
+**Idempotency:** Full refresh — directory cleared at start of each run. No log table.  
+**Output format:** CSV (not JSON)
+
+**XBRL concepts extracted per BDC (from SEC 10-K/10-Q filings):**
+
+| Metric key | XBRL concept | Description | Financial statement |
+|---|---|---|---|
+| `pik` | `us-gaap:InterestIncomeOperatingPaidInKind` | PIK interest accrued but not yet received in cash | Income statement |
+| `nii` | `us-gaap:NetInvestmentIncome` | Net investment income — primary earnings proxy for BDCs | Income statement |
+| `nii_ps` | `us-gaap:InvestmentCompanyInvestmentIncomeLossPerShare` | NII per share — dividend capacity indicator | Income statement |
+| `div_ps` | `us-gaap:CommonStockDividendsPerShareDeclared` | Dividends declared per share | Income statement |
+| `nav_ps` | `us-gaap:NetAssetValuePerShare` | NAV per share — intrinsic value benchmark | Balance sheet |
+| `deprec` | `us-gaap:TaxBasisOfInvestmentsGrossUnrealizedDepreciation` | Unrealized losses on portfolio — stress indicator | Balance sheet |
+| `net_assets` | `us-gaap:AssetsNet` | Total net assets — leverage denominator | Balance sheet |
+| `realized_gl` | `us-gaap:RealizedInvestmentGainsLosses` | Realized gains/losses — P&L impact | Cash flow / other |
+| `gl_ps` | `us-gaap:InvestmentCompanyGainLossOnInvestmentPerShare` | Cumulative gain/loss per share | Cash flow / other |
+
+**edgartools data retrieval pattern:**
+```python
+facts = Company(int(cik)).get_facts()          # All XBRL facts for this CIK
+ts = facts.time_series(xbrl_concept)            # Time series for one concept
+# Returns: DataFrame with period_start, period_end, fiscal_period, numeric_value, accession_number, form
+```
+
+**Output files:**
+
+**`bdc_time_series.csv` — long format (one row per BDC × metric × reporting period):**
+
+| Column | Type | Description |
+|---|---|---|
+| `ticker` | string | BDC symbol |
+| `cik` | string | 10-digit SEC CIK (zero-padded) |
+| `metric` | string | Short key (e.g., "pik", "nii", "nav_ps") |
+| `period_end` | date | Reporting period end date |
+| `fiscal_period` | string | "Q1", "Q2", "Q3", "Q4", or "FY" |
+| `year_quarter` | string | "{year}-{fiscal_period}" (e.g., "2024-Q4") |
+| `numeric_value` | float | Reported XBRL value |
+| `accession_number` | string | EDGAR accession ID (when available) |
+| `form` | string | "10-K" or "10-Q" (when available) |
+| `period_start` | date | Period start date (when available) |
+| `ingested_at` | string | ISO 8601 fetch timestamp |
+
+**`bdc_fy_snapshot.csv` — wide format (one row per BDC, most recent FY only):**
+
+| Column | Type | Description |
+|---|---|---|
+| `ticker` | string | BDC symbol |
+| `cik` | string | SEC CIK |
+| `year_quarter` | string | Most recent FY label (e.g., "2024-FY") |
+| `pik` | float | PIK income |
+| `nii` | float | Net investment income |
+| `nii_ps` | float | NII per share |
+| `div_ps` | float | Dividends per share |
+| `nav_ps` | float | NAV per share |
+| `deprec` | float | Unrealized depreciation |
+| `net_assets` | float | Total net assets |
+| `realized_gl` | float | Realized gains/losses |
+| `gl_ps` | float | Gain/loss per share |
+| `ingested_at` | string | Fetch timestamp |
+
+**Fiscal year handling:** Some BDCs use non-calendar fiscal years (e.g., AINV ends in March). `edgartools` provides `fiscal_year` metadata when available; otherwise it is derived from `period_end.year`. The `year_quarter` column uses fiscal year so AINV's Q4 ending 2024-03-31 is labeled "2024-Q4" not "2023-Q4".
+
+**Why it matters:** These nine XBRL metrics are the early-warning layer that no FMP endpoint provides. Rising PIK (deferred cash income), compressing NAV/share, and growing unrealized depreciation are the specific signals that precede BDC covenant stress — they appear in EDGAR filings quarters before they surface in analyst commentary. The `bdc_fy_snapshot.csv` feeds directly into Agent 1's threshold scanning.
+
+---
+
+## Part 3 — Synthetic Structured Data (`pull_data/` synthetic notebooks)
+
+Generated using Python Faker in Databricks. Registered in Unity Catalog.
+
+---
+
+### S1. Client CRM (`{catalog}.{schema}.clients`)
 
 **Primary Key:** `client_id`  
-**Demo Component:** All components — every query and agent action is scoped to clients
+**Demo component:** Every agent and Genie query is scoped to clients by advisor.
 
 | Field | Description |
 |---|---|
@@ -478,117 +657,171 @@ Generated using Python Faker in Databricks notebooks. Registered in Unity Catalo
 | `tone_profile` | Formal / Conversational / Relationship-first |
 | `relationship_start_date` | Tenure with advisor |
 
-**Why it matters:** Every Genie query is prefixed with "my clients" or "my top 20 clients." Without this table, there is no personalization layer. `tone_profile` is what Agent 3 consults when drafting the reallocation proposal — the same event generates a different email for "Chen Trust" (formal, concise) vs. "Rodriguez Family Office" (conversational, relationship-first).
+**Why it matters:** `tone_profile` is what Agent 3 consults when drafting reallocation proposals — the same covenant event generates a different email for "Chen Trust" (formal, concise) vs. "Rodriguez Family Office" (conversational, relationship-first).
 
 ---
 
-### S2. Client IPS Targets (`uc.wealth.client_ips_targets`)
+### S2. Client IPS Targets (`{catalog}.{schema}.client_ips_targets`)
 
 **Primary Key:** `client_id` + `asset_class`  
-**Demo Component:** Portfolio Dashboard — allocation drift; Genie query "overweight private credit relative to IPS"
+**Demo component:** Allocation drift detection; Genie query "overweight private credit relative to IPS"
 
 | Field | Description |
 |---|---|
 | `client_id` | Client reference |
 | `asset_class` | Equity / Fixed Income / Alternatives / Private Credit / ETF / Cash |
-| `target_allocation_pct` | IPS target (e.g. 10.0%) |
+| `target_allocation_pct` | IPS target (e.g., 10.0%) |
 | `min_allocation_pct` | Lower bound |
 | `max_allocation_pct` | Upper bound |
 | `rebalance_trigger_pct` | Drift threshold that triggers alert |
 
-**Why it matters:** This is the table that makes the Genie demo query answerable. "Overweight private credit relative to IPS target" is a join between `daily_holdings.current_allocation_pct` and `client_ips_targets.max_allocation_pct`. Without this table the query has no answer.
-
 ---
 
-### S3. Daily Holdings (`uc.wealth.daily_holdings`)
+### S3. Daily Holdings (`{catalog}.{schema}.daily_holdings`)
 
 **Primary Key:** `client_id` + `asset_id` + `as_of_date`  
-**Demo Component:** Portfolio Dashboard — per-client position view; Agent 2 cross-account exposure scan
+**Demo component:** Per-client position view; Agent 2 cross-account exposure scan
 
 | Field | Description |
 |---|---|
 | `client_id` | Client reference |
-| `asset_id` | Matches ticker (e.g. `AINV`) or internal fund ID |
+| `asset_id` | Matches ticker (e.g., "AINV") or internal fund ID |
 | `asset_class` | Equity / Fixed Income / ETF / Alternative / Private Credit |
 | `holding_name` | Display name |
 | `market_value` | Current dollar value |
-| `current_allocation_pct` | Current weight in client portfolio (e.g. 14.2%) |
+| `current_allocation_pct` | Current portfolio weight (e.g., 14.2%) |
 | `cost_basis` | Average cost |
 | `quantity` | Units held |
 | `as_of_date` | Position date |
-| `tax_loss_harvesting_eligible` | **Boolean — asset currently held at a loss** |
+| `tax_loss_harvesting_eligible` | Boolean — position held at a loss |
 
-**Why it matters:** This is the join table between clients and securities. Agent 2's entire function is: `SELECT client_id FROM daily_holdings WHERE asset_id = 'AINV'` — which clients have exposure to the name approaching covenant breach. The `tax_loss_harvesting_eligible` flag gives Agent 3 a specific action to include in the reallocation email ("this position also presents a TLH opportunity").
+**Why it matters:** `SELECT client_id FROM daily_holdings WHERE asset_id = 'AINV'` is Agent 2's entire function — identifying which clients are exposed to the name approaching covenant breach. The TLH flag gives Agent 3 a specific, client-beneficial action to include in the reallocation proposal.
 
 ---
 
-### S4. Asset Master & Performance (`uc.wealth.asset_master`)
+### S4. Asset Master & Performance (`{catalog}.{schema}.asset_master`)
 
 **Primary Key:** `asset_id`  
-**Demo Component:** Portfolio Dashboard — top-level KPIs (AUM, Net Flows, Revenue Yield, Alpha)
+**Demo component:** Top-line KPIs (AUM, Net Flows, Revenue Yield, Alpha)
 
 | Field | Description |
 |---|---|
 | `asset_id` | Ticker or internal ID |
 | `asset_name` | Display name |
 | `asset_class` | Equity / Fixed Income / ETF / Alternative / Private Credit |
-| `strategy` | Buyout / Growth / Credit / Liquid Alternatives |
-| `aum` | Total AUM for this position across all clients |
 | `ytd_return_pct` | Year-to-date return |
 | `ytd_alpha_bps` | Alpha vs. benchmark in basis points |
 | `net_flows_ytd` | Net new assets YTD |
 | `revenue_yield_bps` | Fee revenue in basis points |
-| `benchmark_id` | Reference benchmark ticker (e.g. `SPY`, `AGG`) |
+| `benchmark_id` | Reference benchmark ticker (e.g., "SPY", "AGG") |
 | `gp_name` | For alternatives: general partner name |
 | `vintage_year` | For PE funds: vintage year |
 | `dpi` | Distributions to paid-in (PE positions) |
 | `net_irr` | Net IRR (PE positions) |
 | `moic` | Multiple on invested capital (PE positions) |
 
-**Why it matters:** This table powers the four top-line KPIs surfaced at the top of the dashboard: Total AUM, YTD Alpha, Net Flows (NNA), and Revenue Yield. It also provides the PE-specific metrics (DPI, Net IRR, MOIC) needed when the advisor drills into an alternatives position.
-
----
-
-## Part 4 — Synthetic Contextual Data (Personalization Agent)
-
 ---
 
 ### C1. Advisor Communication History
 
-**Format:** Small text dataset or system prompt (3–4 email examples per advisor)  
-**Primary Key:** `advisor_id`  
-**Demo Component:** Agent 3 — tone mimicry for client communication drafts
+**Format:** Small text dataset — 3–4 sample emails per advisor  
+**Demo component:** Agent 3 tone mimicry for client communication drafts
 
 | Field | Description |
 |---|---|
 | `advisor_id` | Advisor reference |
 | `example_email_text` | Verbatim past email (sanitized) |
 | `tone_label` | Formal / Conversational / Relationship-first |
-| `communication_context` | What situation prompted the email |
-
-**Why it matters:** Agent 3 does not generate a generic "dear client" email. It reads 3–4 of the advisor's real past emails, extracts their sentence structure, vocabulary, and sign-off style, and produces a draft that sounds like the advisor wrote it. This is the personalization demo moment — 14 different reallocation proposals, each matching a different advisor's voice.
+| `communication_context` | Situation that prompted the email |
 
 ---
 
-### C2. Tax-Loss Harvesting Status
+## Pipeline Architecture
 
-**Location:** Column within `uc.wealth.daily_holdings` — `tax_loss_harvesting_eligible BOOLEAN`  
-**Demo Component:** Agent 3 — action rationale in reallocation email
+### Unity Catalog Volume Layout
 
-**Why it matters:** When a position is both (a) exposed to a covenant-breach name and (b) held at a loss, the reallocation email has a concrete, client-specific reason to act: "Trimming this position also realizes a tax loss before year-end." This makes the draft actionable, not generic.
+All raw data lands under a single UC Volume root:
+
+```
+/Volumes/{uc_catalog}/{uc_schema}/raw_fmapi/
+├── company_profiles/       {TICKER}/{ts}_profile.json
+├── historical_prices/      {TICKER}/{ts}_prices.json
+├── financials/             {TICKER}/{ts}_{statement}.json   (6 files)
+├── key_metrics/            {TICKER}/{ts}_{type}.json        (2 files)
+├── sec_filings/            {form_dir}/{TICKER}/{FORM}_{date}_{accession}.htm
+├── etf_data/               {TICKER}/{ts}_{type}.json        (3 files)
+├── analyst_data/           {TICKER}/{ts}_{type}.json        (3 files)
+├── stock_news/             {TICKER}/{date}_{url_hash}.json
+├── indexes/                {SYMBOL_CLEAN}/{ts}_history.json
+├── transcripts/            {TICKER}/Q{q}_{year}.json
+├── financial_reports/      {TICKER}/{fiscal_year}_{period}.json
+└── bdc_early_warning/      bdc_time_series.csv
+                            bdc_fy_snapshot.csv
+```
+
+Timestamp prefix format: `YYYY_MM_DD_HH` (hour-level, generated by `ts_prefix()` in `ingest_config.py`).
+
+### Delta Log Tables
+
+Four tables in `{uc_catalog}.{uc_schema}` track incremental downloads for the four notebooks where re-fetching is expensive:
+
+| Table | Notebook | Natural key | Notes |
+|---|---|---|---|
+| `sec_filings_log` | 05_sec_filings | `symbol + accession` | Tracks HTML download success |
+| `stock_news_log` | 08_news | `symbol + url` | Tracks success *and* errors (retries errors on re-run) |
+| `transcripts_log` | 10_transcripts | `symbol + year + quarter` | Skips already-downloaded quarters |
+| `financial_reports_log` | 11_financial_reports | `symbol + fiscal_year + period` | Skips already-downloaded reports |
+
+All four use the `MERGE INTO ... WHEN MATCHED THEN UPDATE / WHEN NOT MATCHED THEN INSERT` pattern.
+
+### Idempotency Summary
+
+| Notebook | Strategy | Trigger |
+|---|---|---|
+| 01 company_profiles | 30-day file recency check | `mtime` of existing file |
+| 02 historical_prices | Full refresh | Every run |
+| 03 financials | Full refresh | Every run |
+| 04 key_metrics | Full refresh | Every run |
+| 05 sec_filings | Delta MERGE on accession | Log table |
+| 06 etf_data | Full refresh | Every run |
+| 07 analyst_data | Full refresh | Every run |
+| 08 news | Delta MERGE on URL | Log table (retries errors) |
+| 09 indexes_and_vix | Full refresh | Every run |
+| 10 transcripts | Delta MERGE on year+quarter | Log table |
+| 11 financial_reports | Delta MERGE on fiscal_year+period | Log table |
+| E1 bdc_early_warning | Full refresh | Directory cleared at start |
+
+### Job Execution Order
+
+Defined in `databricks.yml` and deployed via Databricks Asset Bundles to e2-demo:
+
+```
+Sequential (no log table, fast):
+  01 → 02 → 03 → 04 → 06 → 07 → 09
+
+Parallel fan-out after 09 (log-table / expensive):
+  05_sec_filings  ─┐
+  08_news          ├─ all depend on fmapi_09_indexes_and_vix
+  10_transcripts   │
+  11_reports      ─┘
+
+Independent (separate data sources, run in parallel throughout):
+  factset_01_filings
+  edgar_01_bdc_early_warning
+```
 
 ---
 
 ## Source-to-Component Mapping
 
-| Demo Component | Real (FMP / SEC) | Synthetic (UC Tables) |
-|---|---|---|
-| **Portfolio Intelligence Dashboard** | F1 Profile, F2 Prices, F6 Key Metrics, F9 ETF Info, F11 ETF Sectors, F16 Index Quotes, F17 Index History, F18 VIX, F19 Constituents | S3 Daily Holdings, S2 IPS Targets, S4 Asset Master |
-| **Document Intelligence Layer** | D1 10-Q/8-K filings, D2 Credit Agreements, D3 Transcripts, F3 Income Stmt, F4 Balance Sheet, F5 Cash Flow, F8 SEC Filing links | S1 Client CRM (for scoping) |
-| **Agent 1 — Covenant Detection** | F6 Key Metrics (`netDebtToEBITDA`), F8 SEC 8-K filings, D1 BDC 10-Qs, F18 VIX (risk context) | S4 Asset Master (covenant thresholds) |
-| **Agent 2 — Cross-Account Exposure** | F1 Profile (name resolution) | S3 Daily Holdings (`asset_id` cross-reference) |
-| **Agent 3 — Client Communication** | F15 News, F14 Analyst Ratings, F18 VIX (market context in email) | S1 CRM (`tone_profile`), C1 Advisor History, C2 TLH Status |
-| **Genie Chat Interface** | All FMP sources | S2 IPS Targets, S3 Holdings, S4 Asset Master |
+| Demo Component | FMP Real Data | EDGAR Real Data | Synthetic |
+|---|---|---|---|
+| **Portfolio Dashboard** | F1 Profile, F2 Prices, F4 Key Metrics, F6 ETF, F9 Indexes/VIX | — | S3 Holdings, S2 IPS Targets, S4 Asset Master |
+| **Document Intelligence** | F5 SEC Filings (HTML), F10 Transcripts, F11 Financial Reports JSON, F3 Financials | E1 BDC time series / snapshot | S1 CRM (scoping) |
+| **Agent 1 — Covenant Detection** | F4 `netDebtToEBITDA`, `interestCoverage`; F5 8-K triggers; F7 Forward EBITDA estimates | E1 PIK, NII, NAV/share, unrealized deprec | S4 covenant thresholds |
+| **Agent 2 — Cross-Account Exposure** | F1 Profile (name resolution) | — | S3 Holdings (`asset_id` cross-reference) |
+| **Agent 3 — Client Communication** | F8 News, F7 Ratings & targets, F9 VIX (market context) | — | S1 CRM (`tone_profile`), C1 Advisor history, S3 TLH flag |
+| **Genie Chat** | All FMP sources + EDGAR BDC metrics | E1 BDC snapshot | S2 IPS, S3 Holdings, S4 Asset Master |
 
 ---
 
@@ -596,35 +829,30 @@ Generated using Python Faker in Databricks notebooks. Registered in Unity Catalo
 
 | Term | Definition | Source |
 |---|---|---|
-| **Total AUM** | Assets under management across all clients | `uc.wealth.asset_master.aum` |
-| **YTD Alpha (bps)** | Return generated above benchmark, in basis points | F2 holding `changeOverTime` minus F17 `^GSPC` `changeOverTime` from same start date — stored in `asset_master.ytd_alpha_bps` |
-| **Net Flows / NNA** | Net New Assets: inflows minus outflows YTD | `uc.wealth.asset_master.net_flows_ytd` |
-| **Revenue Yield (bps)** | Fee revenue as basis points of AUM | `uc.wealth.asset_master.revenue_yield_bps` |
-| **IPS Target** | Legally binding target allocation per client per asset class | `uc.wealth.client_ips_targets.target_allocation_pct` |
-| **Allocation Drift** | Current allocation % minus IPS target % | `daily_holdings.current_allocation_pct` − `client_ips_targets.target_allocation_pct` |
-| **UHNW / Family Office** | Ultra-High-Net-Worth — target client segment | `uc.wealth.clients.tier = 'UHNW'` |
-| **Share of Wallet** | % of client's total wealth managed by GS | `uc.wealth.clients.share_of_wallet_pct` |
-| **TLH / Tax-Loss Harvesting** | Selling a position held at a loss to realize a tax deduction | `uc.wealth.daily_holdings.tax_loss_harvesting_eligible` |
-| **Covenant Headroom** | Cushion before breaching debt terms, e.g. 0.3x | F6 `netDebtToEBITDA` vs. covenant threshold in `asset_master` |
-| **Net Debt / EBITDA** | Primary leverage covenant metric | F4 `netDebt` ÷ F3 `ebitda` |
-| **DSCR** | Debt Service Coverage Ratio — cash available / debt service | F5 `operatingCashFlow` ÷ (interest + principal) |
-| **DPI** | Distributions to Paid-In — capital returned vs. invested | `uc.wealth.asset_master.dpi` (PE positions only) |
-| **Net IRR** | Internal rate of return net of fees (PE funds) | `uc.wealth.asset_master.net_irr` |
-| **MOIC** | Multiple on Invested Capital (PE funds) | `uc.wealth.asset_master.moic` |
+| `netDebtToEBITDA` | Net debt / trailing EBITDA — primary leverage covenant | F4 key-metrics |
+| `interestCoverage` | EBIT / interest expense — secondary covenant proxy | F4 key-metrics |
+| **YTD Alpha (bps)** | Holding `changeOverTime` minus `^GSPC` `changeOverTime` from same start date | F2 vs. F9 |
+| **Covenant Headroom** | Cushion before breaching threshold, e.g., "0.3x to limit" | F4 `netDebtToEBITDA` vs. threshold |
+| **PIK** | Payment-In-Kind interest — accrued but not received in cash; BDC stress signal | E1 `pik` (XBRL) |
+| **NII** | Net Investment Income — BDC earnings proxy and dividend coverage metric | E1 `nii` (XBRL) |
+| **NAV/Share** | Net Asset Value per share — BDC intrinsic value benchmark | E1 `nav_ps` (XBRL) |
+| **IPS Target** | Legally binding allocation target per client per asset class | S2 `target_allocation_pct` |
+| **Allocation Drift** | Current weight − IPS target | S3 vs. S2 |
+| **TLH** | Tax-Loss Harvesting — selling a position at a loss for tax benefit | S3 `tax_loss_harvesting_eligible` |
+| **DPI / Net IRR / MOIC** | PE performance metrics: distributions/paid-in, net internal rate of return, multiple on invested capital | S4 (synthetic) |
 
 ---
 
 ## Coverage Gaps
 
-| Asset Class | FMP Coverage | Gap / Approach |
+| Asset Class | Coverage | Gap / Approach |
 |---|---|---|
-| Public Equities | Full — 70,000+ securities | None |
-| Major Indices (DOW, NASDAQ, S&P 500) | Full — real-time quotes and full daily history via `^DJI`, `^GSPC`, `^IXIC` | None |
-| VIX | Accessible via standard index endpoints using `^VIX` symbol — no dedicated endpoint | Use `/api/v3/quote/%5EVIX` and `/api/v3/historical-price-full/%5EVIX` |
-| ETFs | Full — holdings, sectors, performance | None |
-| BDC Securities (AINV, OCSL) | Full — treated as public equities | 10-Q loan schedules downloaded separately from EDGAR |
-| Corporate Bonds (public) | Limited — no bond price feed | Represent as positions in `daily_holdings`; use issuer equity data for intelligence |
-| Private Credit (bilateral loans) | None | Fully synthetic via `asset_master` + covenant fields |
-| Private Equity / Alternatives | None | Fully synthetic — DPI, IRR, MOIC in `asset_master` |
-| Client / IPS Data | None | Fully synthetic — `clients`, `client_ips_targets`, `daily_holdings` |
-| Advisor Tone / Communication History | None | Manually authored — 3–4 sample emails per advisor |
+| Public equities | Full via FMP | None |
+| ETFs (31 funds) | Full via FMP `/etf/*` endpoints | None |
+| Major indices + VIX | Full via FMP `/historical-price-eod/full` | None |
+| BDCs (16 tickers) | FMP for market data; EDGAR XBRL for fund-specific metrics | XBRL availability varies by filer; some older periods may be missing |
+| Corporate bonds | No bond price feed in FMP | Represent as positions in `daily_holdings`; use issuer equity data for intelligence |
+| Private credit (bilateral loans) | None in public sources | Fully synthetic via `asset_master` + covenant fields |
+| Private equity / alternatives | None in public sources | Fully synthetic — DPI, IRR, MOIC in `asset_master` |
+| Client / IPS / holdings data | None in public sources | Fully synthetic |
+| Advisor communication history | None in public sources | Manually authored (3–4 sample emails per advisor) |
