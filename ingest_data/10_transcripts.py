@@ -17,20 +17,21 @@
 
 # COMMAND ----------
 
-# # Uncomment to fully reset — drops the table and clears the Autoloader checkpoint
+# # Uncomment to fully reset — drops the table and clears the Autoloader checkpoint/schema
 # spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts")
 # dbutils.fs.rm(f"{UC_VOLUME_PATH}/_checkpoints/bronze_transcripts", recurse=True)
+# dbutils.fs.rm(f"{UC_VOLUME_PATH}/_schemas/bronze_transcripts", recurse=True)
 
 # COMMAND ----------
 
 spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts (
-        symbol      STRING,
-        year        INT,
-        quarter     INT,
-        date        STRING,
-        title       STRING,
-        content     STRING
+        symbol  STRING,
+        year    INT,
+        quarter INT,
+        date    STRING,
+        title   STRING,
+        content STRING
     )
     USING DELTA
 """)
@@ -38,6 +39,7 @@ spark.sql(f"""
 # COMMAND ----------
 
 checkpoint_path = f"{UC_VOLUME_PATH}/_checkpoints/bronze_transcripts"
+schema_path     = f"{UC_VOLUME_PATH}/_schemas/bronze_transcripts"
 source_path     = f"{UC_VOLUME_PATH}/transcripts/*/*.json"
 
 query = (
@@ -45,6 +47,7 @@ query = (
         .format("cloudFiles")
         .option("cloudFiles.format", "json")
         .option("cloudFiles.inferColumnTypes", "true")
+        .option("cloudFiles.schemaLocation", schema_path)
         .option("multiLine", "true")
         .load(source_path)
         .writeStream

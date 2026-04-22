@@ -17,10 +17,6 @@
 
 # COMMAND ----------
 
-from pyspark.sql.functions import col
-
-# COMMAND ----------
-
 # # Uncomment to wipe the Delta table before re-running
 # spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_indexes_and_vix")
 
@@ -37,6 +33,7 @@ spark.sql(f"""
         volume        LONG,
         change        DOUBLE,
         changePercent DOUBLE,
+        vwap          DOUBLE,
         ingested_at   STRING
     )
     USING DELTA
@@ -44,14 +41,10 @@ spark.sql(f"""
 
 # COMMAND ----------
 
-wildcard_path = f"{UC_VOLUME_PATH}/indexes/*/*_history.json"
+wildcard_path   = f"{UC_VOLUME_PATH}/indexes/*/*_history.json"
+target_schema   = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_indexes_and_vix").schema
 
-df = (
-    spark.read
-        .option("multiline", "true")
-        .json(wildcard_path)
-        .withColumn("date", col("date").cast("date"))
-)
+df = spark.read.option("multiline", "true").schema(target_schema).json(wildcard_path)
 
 df.write.mode("overwrite").saveAsTable(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_indexes_and_vix")
 
