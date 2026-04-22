@@ -12,11 +12,9 @@
 import random
 import pandas as pd
 from faker import Faker
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
-fake  = Faker()
+fake = Faker()
 random.seed(42)
 Faker.seed(42)
 

@@ -11,10 +11,8 @@
 # COMMAND ----------
 
 import pandas as pd
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp
 
-spark    = SparkSession.builder.getOrCreate()
 uc_table = lambda name: f"{UC_CATALOG}.{UC_SCHEMA}.{name}"
 
 # COMMAND ----------
