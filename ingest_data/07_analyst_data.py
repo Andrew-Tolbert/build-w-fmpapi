@@ -19,10 +19,6 @@
 
 # COMMAND ----------
 
-from pyspark.sql.functions import col
-
-# COMMAND ----------
-
 # # Uncomment to wipe tables before re-running
 # for t in ["bronze_analyst_estimates", "bronze_price_targets", "bronze_analyst_ratings"]:
 #     spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.{t}")
@@ -31,20 +27,29 @@ from pyspark.sql.functions import col
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_analyst_estimates (
-        symbol                          STRING,
-        date                            DATE,
-        period                          STRING,
-        estimatedRevenueAvg             DOUBLE,
-        estimatedRevenueLow             DOUBLE,
-        estimatedRevenueHigh            DOUBLE,
-        estimatedEbitdaAvg              DOUBLE,
-        estimatedEbitdaLow              DOUBLE,
-        estimatedEbitdaHigh             DOUBLE,
-        estimatedEpsAvg                 DOUBLE,
-        estimatedEpsLow                 DOUBLE,
-        estimatedEpsHigh                DOUBLE,
-        numberAnalystEstimatedRevenue   LONG,
-        ingested_at                     STRING
+        symbol             STRING,
+        date               DATE,
+        revenueLow         DOUBLE,
+        revenueHigh        DOUBLE,
+        revenueAvg         DOUBLE,
+        ebitdaLow          DOUBLE,
+        ebitdaHigh         DOUBLE,
+        ebitdaAvg          DOUBLE,
+        ebitLow            DOUBLE,
+        ebitHigh           DOUBLE,
+        ebitAvg            DOUBLE,
+        netIncomeLow       DOUBLE,
+        netIncomeHigh      DOUBLE,
+        netIncomeAvg       DOUBLE,
+        sgaExpenseLow      DOUBLE,
+        sgaExpenseHigh     DOUBLE,
+        sgaExpenseAvg      DOUBLE,
+        epsAvg             DOUBLE,
+        epsHigh            DOUBLE,
+        epsLow             DOUBLE,
+        numAnalystsRevenue LONG,
+        numAnalystsEps     LONG,
+        ingested_at        STRING
     )
     USING DELTA
 """)
@@ -54,12 +59,10 @@ spark.sql(f"""
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_price_targets (
         symbol          STRING,
-        targetConsensus DOUBLE,
-        targetMedian    DOUBLE,
         targetHigh      DOUBLE,
         targetLow       DOUBLE,
-        analystCount    LONG,
-        lastUpdate      STRING,
+        targetConsensus DOUBLE,
+        targetMedian    DOUBLE,
         ingested_at     STRING
     )
     USING DELTA
@@ -69,13 +72,13 @@ spark.sql(f"""
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_analyst_ratings (
-        symbol     STRING,
-        strongBuy  LONG,
-        buy        LONG,
-        hold       LONG,
-        sell       LONG,
-        strongSell LONG,
-        consensus  STRING,
+        symbol      STRING,
+        strongBuy   LONG,
+        buy         LONG,
+        hold        LONG,
+        sell        LONG,
+        strongSell  LONG,
+        consensus   STRING,
         ingested_at STRING
     )
     USING DELTA
@@ -85,15 +88,14 @@ spark.sql(f"""
 
 base = f"{UC_VOLUME_PATH}/analyst_data"
 
-for suffix, table, date_col in [
-    ("analyst_estimates", "bronze_analyst_estimates", True),
-    ("price_targets",     "bronze_price_targets",     False),
-    ("analyst_ratings",   "bronze_analyst_ratings",   False),
+for suffix, table in [
+    ("analyst_estimates", "bronze_analyst_estimates"),
+    ("price_targets",     "bronze_price_targets"),
+    ("analyst_ratings",   "bronze_analyst_ratings"),
 ]:
     path = f"{base}/*/*_{suffix}.json"
-    df = spark.read.option("multiline", "true").json(path)
-    if date_col:
-        df = df.withColumn("date", col("date").cast("date"))
+    target_schema = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.{table}").schema
+    df = spark.read.option("multiline", "true").schema(target_schema).json(path)
     df.write.mode("overwrite").saveAsTable(f"{UC_CATALOG}.{UC_SCHEMA}.{table}")
     print(f"Loaded {df.count()} rows into {UC_CATALOG}.{UC_SCHEMA}.{table}")
 
