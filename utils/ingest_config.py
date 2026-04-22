@@ -236,7 +236,10 @@ SECRET_SCOPE   = "awm-demo"
 SECRET_KEY_FMP = "fmp-api-key"
 
 # read a specific secret
-FMP_API_KEY= dbutils.secrets.get(catalog=UC_CATALOG , schema=UC_SCHEMA, key=SECRET_KEY)
+try:
+    FMP_API_KEY = dbutils.secrets.get(catalog=UC_CATALOG, schema=UC_SCHEMA, key=SECRET_KEY)
+except Exception:
+    FMP_API_KEY = None  # not available in synthetic notebooks
 
 FMP_BASE_URL_STABLE = "https://financialmodelingprep.com/stable"
 FMP_BASE_URL_V3     = "https://financialmodelingprep.com/api/v3"

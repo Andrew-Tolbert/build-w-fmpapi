@@ -1,115 +1,130 @@
 # Databricks notebook source
-# COMMAND ----------
-
-# Generate the asset master table with AUM, performance, and PE-specific metrics.
-# Powers the top-level dashboard KPIs: Total AUM, YTD Alpha, Net Flows, Revenue Yield.
-# Also stores PE metrics (DPI, Net IRR, MOIC) for alternative positions.
-# Target: uc.wealth.asset_master
-# Source: S4
-
-# COMMAND ----------
-
-
-# COMMAND ----------
-
-# MAGIC %run ../utils/config
+# Build the asset master table — one row per unique asset held across all clients.
+# AUM is aggregated from daily_holdings. Sector/industry/geography are carried
+# through from holdings for portfolio composition views.
+#
+# Performance metrics (ytd_return, alpha) are intentionally omitted here —
+# they will be joined from materialized price data once 02_historical_prices
+# has been landed and Delta-ized.
+#
+# BDC covenant metrics are manually seeded for the demo:
+#   OBDC net_debt_to_ebitda=3.22 vs threshold=3.50 → headroom=0.28x → Agent 1 trigger
+#
+# Target: {catalog}.{schema}.asset_master
 
 # COMMAND ----------
 
-import random
+# MAGIC %run ../utils/ingest_config
+
+# COMMAND ----------
+
 import pandas as pd
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import current_timestamp
 
-spark = SparkSession.builder.getOrCreate()
-random.seed(42)
+spark    = SparkSession.builder.getOrCreate()
+uc_table = lambda name: f"{UC_CATALOG}.{UC_SCHEMA}.{name}"
 
 # COMMAND ----------
 
-# Derive AUM per asset from the holdings table
+# Uncomment to drop and fully recreate:
+# spark.sql(f"DROP TABLE IF EXISTS {uc_table('asset_master')}")
+
+# COMMAND ----------
+
 holdings_df = spark.table(uc_table("daily_holdings")).toPandas()
-aum_by_asset = holdings_df.groupby(["asset_id","asset_class","holding_name"])["market_value"].sum().reset_index()
-aum_by_asset.columns = ["asset_id","asset_class","asset_name","aum"]
+
+aum_by_asset = (
+    holdings_df
+    .groupby(["asset_id", "asset_class", "holding_name", "sector", "industry", "geography"])["market_value"]
+    .sum()
+    .reset_index()
+    .rename(columns={"market_value": "aum"})
+)
+print(f"Unique assets: {len(aum_by_asset)}")
 
 # COMMAND ----------
 
-# Benchmark mapping
-BENCHMARK_MAP = {
-    "Equity":         "^GSPC",
-    "Fixed Income":   "AGG",
-    "ETF":            "^GSPC",
-    "Alternatives":   "^GSPC",
-    "Private Credit": "AGG",
-    "Cash":           None,
+# ── BDC covenant metrics ──────────────────────────────────────────────────────
+# OBDC (Blue Owl Capital) is seeded near the 3.5x covenant threshold.
+# All other top-tier BDCs are healthy.
+
+BDC_COVENANT_THRESHOLD = 3.50
+
+BDC_COVENANT = {
+    "ARCC": (1.82, 1.68),   # (net_debt_to_ebitda, headroom)
+    "MAIN": (1.55, 1.95),
+    "BXSL": (1.93, 1.57),
+    "OBDC": (3.22, 0.28),   # ← approaching covenant breach — Agent 1 demo trigger
+    "HTGC": (2.08, 1.42),
+    "GBDC": (1.71, 1.79),
 }
 
-# Add performance and metadata columns
-rows = []
-for _, row in aum_by_asset.iterrows():
-    asset_class = row["asset_class"]
-    is_pe       = asset_class == "Alternatives"
-    is_pc       = asset_class == "Private Credit"
-
-    # YTD return: alternatives and private credit show stable/moderate returns
-    if is_pe:
-        ytd_return = round(random.uniform(8.0, 22.0), 2)
-    elif is_pc:
-        ytd_return = round(random.uniform(6.0, 12.0), 2)
-    elif asset_class == "Cash":
-        ytd_return = round(random.uniform(4.5, 5.2), 2)
-    else:
-        ytd_return = round(random.uniform(-5.0, 18.0), 2)
-
-    # Alpha: positive for most, negative for covenant-breach name
-    if row["asset_id"] == "AINV":
-        ytd_alpha_bps = round(random.uniform(-250, -80), 0)   # underperforming — demo signal
-    else:
-        ytd_alpha_bps = round(random.uniform(-50, 200), 0)
-
-    rows.append({
-        "asset_id":            row["asset_id"],
-        "asset_name":          row["asset_name"],
-        "asset_class":         asset_class,
-        "strategy":            "Private Credit" if is_pc else ("Buyout" if is_pe else asset_class),
-        "aum":                 round(row["aum"], 2),
-        "ytd_return_pct":      ytd_return,
-        "ytd_alpha_bps":       ytd_alpha_bps,
-        "net_flows_ytd":       round(random.uniform(-5e6, 20e6), 2),
-        "revenue_yield_bps":   round(random.uniform(50, 125) if is_pe or is_pc else random.uniform(5, 50), 1),
-        "benchmark_id":        BENCHMARK_MAP.get(asset_class),
-        # PE-specific metrics (null for non-PE)
-        "gp_name":             row["asset_name"].split(" Fund")[0] if is_pe else None,
-        "vintage_year":        random.randint(2018, 2022) if is_pe else None,
-        "dpi":                 round(random.uniform(0.2, 1.4), 2) if is_pe else None,
-        "net_irr":             round(random.uniform(12.0, 28.0), 2) if is_pe else None,
-        "moic":                round(random.uniform(1.2, 2.8), 2) if is_pe else None,
-        # Private credit covenant metrics
-        "covenant_threshold":  3.50 if is_pc else None,
-        "net_debt_to_ebitda":  3.20 if row["asset_id"] == "AINV" else (round(random.uniform(1.5, 2.9), 2) if is_pc else None),
-        "covenant_headroom":   0.30 if row["asset_id"] == "AINV" else (round(random.uniform(0.6, 2.0), 2) if is_pc else None),
-    })
-
-asset_master_df = pd.DataFrame(rows)
-print(f"Generated {len(asset_master_df)} asset master records")
-
-# Verify AINV shows the covenant breach scenario
-ainv = asset_master_df[asset_master_df["asset_id"] == "AINV"]
-if not ainv.empty:
-    print(f"\nAINV covenant check — headroom: {ainv['covenant_headroom'].values[0]}x (threshold: {ainv['covenant_threshold'].values[0]}x)")
+# ── PE fund GP metadata ───────────────────────────────────────────────────────
+PE_GP = {
+    "FUND_BX_RE23":  "Blackstone",
+    "FUND_KKR_AM15": "KKR",
+    "FUND_APO_X":    "Apollo",
+    "FUND_CG_VII":   "Carlyle",
+    "FUND_TPG_VIII": "TPG",
+    "FUND_NB_IX":    "Neuberger Berman",
+    "FUND_WP_XIV":   "Warburg Pincus",
+    "FUND_GAM_IV":   "General Atlantic",
+}
 
 # COMMAND ----------
 
-# Compute portfolio-level KPI summary
-total_aum          = asset_master_df["aum"].sum()
-wtd_alpha          = (asset_master_df["ytd_alpha_bps"] * asset_master_df["aum"]).sum() / total_aum
-net_flows_ytd      = asset_master_df["net_flows_ytd"].sum()
-wtd_revenue_yield  = (asset_master_df["revenue_yield_bps"] * asset_master_df["aum"]).sum() / total_aum
+rows = []
+for _, row in aum_by_asset.iterrows():
+    asset_id    = row["asset_id"]
+    asset_class = row["asset_class"]
+    is_pc       = asset_class == "Private Credit"
+    is_pe       = asset_class == "Alternatives"
 
-print(f"\n--- Portfolio KPIs ---")
-print(f"Total AUM:       ${total_aum:,.0f}")
-print(f"YTD Alpha:       {wtd_alpha:.0f} bps")
-print(f"Net Flows YTD:   ${net_flows_ytd:,.0f}")
-print(f"Revenue Yield:   {wtd_revenue_yield:.1f} bps")
+    covenant_threshold = covenant_net_debt = covenant_headroom = None
+    if is_pc and asset_id in BDC_COVENANT:
+        covenant_net_debt, covenant_headroom = BDC_COVENANT[asset_id]
+        covenant_threshold = BDC_COVENANT_THRESHOLD
+
+    rows.append({
+        "asset_id":           asset_id,
+        "asset_name":         row["holding_name"],
+        "asset_class":        asset_class,
+        "sector":             row["sector"],
+        "industry":           row["industry"],
+        "geography":          row["geography"],
+        "aum":                round(row["aum"], 2),
+        "client_count":       int(holdings_df[holdings_df["asset_id"] == asset_id]["client_id"].nunique()),
+        # PE structural metadata
+        "gp_name":            PE_GP.get(asset_id),
+        # BDC covenant metrics
+        "covenant_threshold":   covenant_threshold,
+        "net_debt_to_ebitda":   covenant_net_debt,
+        "covenant_headroom":    covenant_headroom,
+        # Performance fields — populated later from materialized price data
+        "ytd_return_pct":     None,
+        "ytd_alpha_bps":      None,
+        "net_flows_ytd":      None,
+        "revenue_yield_bps":  None,
+        "benchmark_id":       None,
+    })
+
+asset_master_df = pd.DataFrame(rows).sort_values("aum", ascending=False)
+
+# COMMAND ----------
+
+print(f"Asset master: {len(asset_master_df)} assets")
+
+by_class = asset_master_df.groupby("asset_class")["aum"].sum().sort_values(ascending=False)
+print("\nAUM by asset class:")
+for cls, aum in by_class.items():
+    print(f"  {cls:<20} ${aum:>15,.0f}")
+
+print(f"\nTotal AUM: ${asset_master_df['aum'].sum():,.0f}")
+
+print("\n── BDC covenant summary ─────────────────────────────────────────────")
+bdc_rows = asset_master_df[asset_master_df["covenant_threshold"].notna()].sort_values("covenant_headroom")
+print(bdc_rows[["asset_id", "net_debt_to_ebitda", "covenant_threshold", "covenant_headroom", "client_count"]].to_string(index=False))
 
 # COMMAND ----------
 

@@ -1,17 +1,11 @@
 # Databricks notebook source
-# COMMAND ----------
-
-# Generate synthetic UHNW client CRM data.
-# Target: uc.wealth.clients
-# Source: S1 — Faker-generated client records
+# Generate synthetic UHNW/HNW client CRM data.
+# 110 clients: 80 UHNW (4 IPS profiles × 20) + 30 HNW (3 IPS profiles × 10).
+# Target: {catalog}.{schema}.clients
 
 # COMMAND ----------
 
-# MAGIC %pip install faker
-
-# COMMAND ----------
-
-# MAGIC %run ../utils/config
+# MAGIC %run ../utils/ingest_config
 
 # COMMAND ----------
 
@@ -26,46 +20,100 @@ fake  = Faker()
 random.seed(42)
 Faker.seed(42)
 
+uc_table = lambda name: f"{UC_CATALOG}.{UC_SCHEMA}.{name}"
+
 # COMMAND ----------
 
-ADVISOR_IDS = ["ADV001", "ADV002", "ADV003", "ADV004"]
-TIERS       = ["UHNW"] * 14 + ["HNW"] * 6   # 14 UHNW, 6 HNW = 20 clients
+# Uncomment to drop and fully recreate the clients table:
+# spark.sql(f"DROP TABLE IF EXISTS {uc_table('clients')}")
+
+# COMMAND ----------
+
+ADVISOR_IDS = [f"ADV{i:03d}" for i in range(1, 7)]  # 6 advisors
 
 UHNW_NAME_PATTERNS = [
     "{last} Family Office",
     "{last} Trust",
     "{last} & Associates",
-    "{last} Capital",
+    "{last} Capital Management",
     "{first} {last} Private Wealth",
+    "The {last} Group",
+    "{last} Wealth Partners",
+    "{last} Family Foundation",
+]
+
+HNW_NAME_PATTERNS = [
+    "{first} {last}",
+    "{last} Family",
+    "{first} {last} Trust",
 ]
 
 TONE_PROFILES = ["Formal", "Conversational", "Relationship-first"]
 CONTACT_PREFS = ["Email", "Call", "Secure Message"]
 
+# ips_profile drives allocation targets in 02_ips_targets.py
+UHNW_IPS_PROFILES = ["Growth", "Income", "Balanced", "Alternatives-Heavy"]
+HNW_IPS_PROFILES  = ["Conservative", "Moderate", "Growth-HNW"]
+
 # COMMAND ----------
 
 records = []
-for i, tier in enumerate(TIERS):
-    first = fake.first_name()
-    last  = fake.last_name()
-    pattern = random.choice(UHNW_NAME_PATTERNS) if tier == "UHNW" else f"{first} {last}"
-    client_name = pattern.format(first=first, last=last)
+client_counter = 1
 
-    records.append({
-        "client_id":              f"CLT{i+1:04d}",
-        "client_name":            client_name,
-        "tier":                   tier,
-        "total_aum":              round(random.uniform(25e6, 500e6) if tier == "UHNW" else random.uniform(5e6, 25e6), 2),
-        "advisor_id":             random.choice(ADVISOR_IDS),
-        "share_of_wallet_pct":    round(random.uniform(0.30, 0.95), 2),
-        "contact_method_pref":    random.choice(CONTACT_PREFS),
-        "tone_profile":           random.choice(TONE_PROFILES),
-        "relationship_start_year": random.randint(2010, 2022),
-    })
+# 80 UHNW — 20 per IPS profile
+for profile in UHNW_IPS_PROFILES:
+    for _ in range(20):
+        first = fake.first_name()
+        last  = fake.last_name()
+        pattern = random.choice(UHNW_NAME_PATTERNS)
+        records.append({
+            "client_id":               f"CLT{client_counter:04d}",
+            "client_name":             pattern.format(first=first, last=last),
+            "tier":                    "UHNW",
+            "ips_profile":             profile,
+            "bdc_eligible":            False,  # set below for 25 clients
+            "total_aum":               round(random.uniform(25e6, 800e6), 2),
+            "advisor_id":              random.choice(ADVISOR_IDS),
+            "share_of_wallet_pct":     round(random.uniform(0.30, 0.95), 2),
+            "contact_method_pref":     random.choice(CONTACT_PREFS),
+            "tone_profile":            random.choice(TONE_PROFILES),
+            "relationship_start_year": random.randint(2005, 2022),
+        })
+        client_counter += 1
 
+# 30 HNW — 10 per IPS profile
+for profile in HNW_IPS_PROFILES:
+    for _ in range(10):
+        first = fake.first_name()
+        last  = fake.last_name()
+        pattern = random.choice(HNW_NAME_PATTERNS)
+        records.append({
+            "client_id":               f"CLT{client_counter:04d}",
+            "client_name":             pattern.format(first=first, last=last),
+            "tier":                    "HNW",
+            "ips_profile":             profile,
+            "bdc_eligible":            False,
+            "total_aum":               round(random.uniform(5e6, 25e6), 2),
+            "advisor_id":              random.choice(ADVISOR_IDS),
+            "share_of_wallet_pct":     round(random.uniform(0.30, 0.80), 2),
+            "contact_method_pref":     random.choice(CONTACT_PREFS),
+            "tone_profile":            random.choice(TONE_PROFILES),
+            "relationship_start_year": random.randint(2008, 2023),
+        })
+        client_counter += 1
+
+# COMMAND ----------
+
+# Mark 25 UHNW clients as BDC-eligible (board-approved for private credit BDC exposure)
 clients_df = pd.DataFrame(records)
+uhnw_ids = clients_df[clients_df["tier"] == "UHNW"]["client_id"].tolist()
+bdc_eligible_ids = set(random.sample(uhnw_ids, 25))
+clients_df["bdc_eligible"] = clients_df["client_id"].isin(bdc_eligible_ids)
+
 print(f"Generated {len(clients_df)} clients")
-print(clients_df[["client_id","client_name","tier","total_aum","advisor_id"]].head(10).to_string())
+print(f"  UHNW: {(clients_df['tier'] == 'UHNW').sum()} | HNW: {(clients_df['tier'] == 'HNW').sum()}")
+print(f"  BDC-eligible UHNW: {clients_df['bdc_eligible'].sum()}")
+print(clients_df[["client_id", "client_name", "tier", "ips_profile", "total_aum", "bdc_eligible"]].head(12).to_string())
 
 # COMMAND ----------
 

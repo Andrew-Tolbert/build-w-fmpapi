@@ -36,7 +36,8 @@ All FMP notebooks share the same config pattern: they `%run ../../utils/ingest_c
 **Ticker scope:** `EQUITY_TICKERS` (all equities + BDCs, respects `LIMITED_LOAD`)  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/company_profiles/{TICKER}/{YYYY_MM_DD_HH}_profile.json`  
 **Idempotency:** 30-day file recency check (no log table) — skips re-fetch if file is < 30 days old  
-**Refresh config:** `full_refresh: True` (wipes directory on each refresh run)
+**Refresh config:** `full_refresh: True` (wipes directory on each refresh run)  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **Response schema — array[0]:**
 
@@ -70,7 +71,8 @@ All FMP notebooks share the same config pattern: they `%run ../../utils/ingest_c
 **Ticker scope:** `EQUITY_TICKERS`  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/historical_prices/{TICKER}/{YYYY_MM_DD_HH}_prices.json`  
 **Idempotency:** Full refresh — overwrites on every run  
-**Refresh config:** `full_refresh: True`
+**Refresh config:** `full_refresh: True`  
+**Refresh cadence:** Daily (`GS AWM | Data Ingest | Daily` — 6 AM UTC, Mon–Fri)
 
 **Response schema — `response["historical"]` array:**
 
@@ -111,7 +113,8 @@ Six endpoints called per ticker — quarterly, 24 periods each (~6 years).
 **Ticker scope:** `EQUITY_TICKERS`  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/financials/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
 **Idempotency:** Full refresh  
-**Refresh config:** `full_refresh: True`
+**Refresh config:** `full_refresh: True`  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **Income Statement schema (array of period objects):**
 
@@ -178,7 +181,8 @@ Two endpoints per ticker, 24 quarterly periods each.
 **Ticker scope:** `EQUITY_TICKERS`  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/key_metrics/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
 **Idempotency:** Full refresh  
-**Refresh config:** `full_refresh: True`
+**Refresh config:** `full_refresh: True`  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **Key Metrics schema (key fields):**
 
@@ -228,7 +232,8 @@ Two endpoints per ticker, 24 quarterly periods each.
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/sec_filings/{form_type_dir}/{TICKER}/{FORM_TYPE}_{filing_date}_{accession}.htm`  
 **Idempotency:** Delta MERGE on `(symbol, accession)` — never re-downloads a fetched filing  
 **Refresh config:** `full_refresh: False` — log table is NOT dropped on re-run  
-**Log table:** `{catalog}.{schema}.sec_filings_log`
+**Log table:** `{catalog}.{schema}.sec_filings_log`  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **Response schema — array of filing objects:**
 
@@ -283,7 +288,8 @@ Three endpoints per ETF ticker.
 **Ticker scope:** `ETF_TICKERS` — 31 ETFs: SPY, QQQ, IWM, VTI, VOO, DIA, AGG, TLT, LQD, HYG, JNK, EMB, BIL, SHY, BKLN, XLF, XLK, XLE, XLV, XLI, XLY, XLU, XLP, XLRE, EFA, EEM, VEU, GLD, SLV, DBC, VNQ  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/etf_data/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
 **Idempotency:** Full refresh  
-**Refresh config:** `full_refresh: True`
+**Refresh config:** `full_refresh: True`  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **ETF Info schema:**
 
@@ -340,7 +346,8 @@ Three endpoints per ticker.
 **Ticker scope:** `EQUITY_TICKERS`  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/analyst_data/{TICKER}/{YYYY_MM_DD_HH}_{filename}.json`  
 **Idempotency:** Full refresh  
-**Refresh config:** `full_refresh: True`
+**Refresh config:** `full_refresh: True`  
+**Refresh cadence:** Daily (`GS AWM | Data Ingest | Daily` — 6 AM UTC, Mon–Fri)
 
 **Analyst Estimates schema (array of forward periods):**
 
@@ -391,7 +398,8 @@ Three endpoints per ticker.
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/stock_news/{TICKER}/{YYYY-MM-DD}_{8-char-md5}.json`  
 **Idempotency:** Delta MERGE on `(symbol, url)` — retries errors, skips prior successes  
 **Refresh config:** `full_refresh: False`  
-**Log table:** `{catalog}.{schema}.stock_news_log`
+**Log table:** `{catalog}.{schema}.stock_news_log`  
+**Refresh cadence:** Daily (`GS AWM | Data Ingest | Daily` — 6 AM UTC, Mon–Fri)
 
 **FMP response schema — array of article objects:**
 
@@ -444,7 +452,8 @@ Three endpoints per ticker.
 **Symbols:** `^GSPC` (S&P 500), `^DJI` (Dow Jones), `^IXIC` (Nasdaq), `^VIX` (volatility) — from `INDEX_SYMBOLS` + `VIX_SYMBOL` in `ingest_config`  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/indexes/{SYMBOL_CLEAN}/{YYYY_MM_DD_HH}_history.json` (symbol cleaned: `^` removed)  
 **Idempotency:** Full refresh  
-**Refresh config:** `full_refresh: True`
+**Refresh config:** `full_refresh: True`  
+**Refresh cadence:** Daily (`GS AWM | Data Ingest | Daily` — 6 AM UTC, Mon–Fri)
 
 **Response schema — `response["historical"]` array:**
 
@@ -474,7 +483,8 @@ Three endpoints per ticker.
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/transcripts/{TICKER}/Q{quarter}_{year}.json`  
 **Idempotency:** Delta MERGE on `(symbol, year, quarter)`  
 **Refresh config:** `full_refresh: False`  
-**Log table:** `{catalog}.{schema}.transcripts_log`
+**Log table:** `{catalog}.{schema}.transcripts_log`  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **Response schema:**
 
@@ -519,7 +529,8 @@ Two endpoints per ticker — availability check followed by selective report dow
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/financial_reports/{TICKER}/{fiscal_year}_{period}.json` (e.g., `2024_FY.json`, `2024_Q3.json`)  
 **Idempotency:** Delta MERGE on `(symbol, fiscal_year, period)`  
 **Refresh config:** `full_refresh: False`  
-**Log table:** `{catalog}.{schema}.financial_reports_log`
+**Log table:** `{catalog}.{schema}.financial_reports_log`  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **Report Dates response schema (array):**
 
@@ -569,7 +580,8 @@ Two endpoints per ticker — availability check followed by selective report dow
 **Ticker scope:** `BDC_TICKERS` — 16 BDCs: ARCC, MAIN, GBDC, FSK, BXSL, OBDC, HTGC, NMFC, PSEC, SLRC, GSBD, CGBD, AINV, OCSL, TCPC, CSWC  
 **UC Volume path:** `/Volumes/{catalog}/{schema}/raw_fmapi/bdc_early_warning/` (full directory cleared on every run)  
 **Idempotency:** Full refresh — directory cleared at start of each run. No log table.  
-**Output format:** CSV (not JSON)
+**Output format:** CSV (not JSON)  
+**Refresh cadence:** Monthly (`GS AWM | Data Ingest | Monthly` — 3 AM UTC, 1st of month)
 
 **XBRL concepts extracted per BDC (from SEC 10-K/10-Q filings):**
 
@@ -776,36 +788,47 @@ All four use the `MERGE INTO ... WHEN MATCHED THEN UPDATE / WHEN NOT MATCHED THE
 
 ### Idempotency Summary
 
-| Notebook | Strategy | Trigger |
-|---|---|---|
-| 01 company_profiles | 30-day file recency check | `mtime` of existing file |
-| 02 historical_prices | Full refresh | Every run |
-| 03 financials | Full refresh | Every run |
-| 04 key_metrics | Full refresh | Every run |
-| 05 sec_filings | Delta MERGE on accession | Log table |
-| 06 etf_data | Full refresh | Every run |
-| 07 analyst_data | Full refresh | Every run |
-| 08 news | Delta MERGE on URL | Log table (retries errors) |
-| 09 indexes_and_vix | Full refresh | Every run |
-| 10 transcripts | Delta MERGE on year+quarter | Log table |
-| 11 financial_reports | Delta MERGE on fiscal_year+period | Log table |
-| E1 bdc_early_warning | Full refresh | Directory cleared at start |
+| Notebook | Strategy | Trigger | Cadence |
+|---|---|---|---|
+| 01 company_profiles | 30-day file recency check | `mtime` of existing file | Monthly |
+| 02 historical_prices | Full refresh | Every run | Daily |
+| 03 financials | Full refresh | Every run | Monthly |
+| 04 key_metrics | Full refresh | Every run | Monthly |
+| 05 sec_filings | Delta MERGE on accession | Log table | Monthly |
+| 06 etf_data | Full refresh | Every run | Monthly |
+| 07 analyst_data | Full refresh | Every run | Daily |
+| 08 news | Delta MERGE on URL | Log table (retries errors) | Daily |
+| 09 indexes_and_vix | Full refresh | Every run | Daily |
+| 10 transcripts | Delta MERGE on year+quarter | Log table | Monthly |
+| 11 financial_reports | Delta MERGE on fiscal_year+period | Log table | Monthly |
+| E1 bdc_early_warning | Full refresh | Directory cleared at start | Monthly |
 
 ### Job Execution Order
 
-Defined in `databricks.yml` and deployed via Databricks Asset Bundles to e2-demo:
+Defined in `databricks.yml` and deployed via Databricks Asset Bundles to e2-demo. Two separate jobs with independent schedules:
 
 ```
-Sequential (no log table, fast):
-  01 → 02 → 03 → 04 → 06 → 07 → 09
+──────────────────────────────────────────────────────────────────────
+GS AWM | Data Ingest | Daily  (6:00 AM UTC, Mon–Fri)
+──────────────────────────────────────────────────────────────────────
+Sequential (no log table):
+  02_historical_prices → 07_analyst_data → 09_indexes_and_vix
 
-Parallel fan-out after 09 (log-table / expensive):
-  05_sec_filings  ─┐
-  08_news          ├─ all depend on fmapi_09_indexes_and_vix
-  10_transcripts   │
-  11_reports      ─┘
+Parallel fan-out after 09 (log table):
+  08_news ─── depends on fmapi_09_indexes_and_vix
 
-Independent (separate data sources, run in parallel throughout):
+──────────────────────────────────────────────────────────────────────
+GS AWM | Data Ingest | Monthly  (3:00 AM UTC, 1st of month)
+──────────────────────────────────────────────────────────────────────
+Sequential (no log table):
+  01_company_profiles → 03_financials → 04_key_metrics → 06_etf_data
+
+Parallel fan-out after 06 (log table):
+  05_sec_filings    ─┐
+  10_transcripts     ├─ all depend on fmapi_06_etf_data
+  11_financial_reports ─┘
+
+Independent (run in parallel with FMAPI chain throughout):
   factset_01_filings
   edgar_01_bdc_early_warning
 ```

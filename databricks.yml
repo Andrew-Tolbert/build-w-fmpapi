@@ -11,199 +11,194 @@ targets:
     workspace:
       root_path: /Workspace/Users/andrew.tolbert@databricks.com/.bundle/${bundle.name}/${bundle.target}
 
+x-base-params: &base_params
+  uc_catalog: "{{job.parameters.uc_catalog}}"
+  uc_schema: "{{job.parameters.uc_schema}}"
+  secret_key: "{{job.parameters.secret_key}}"
+  limited_load: "{{job.parameters.limited_load}}"
+  history_start_date: "{{job.parameters.history_start_date}}"
+
+x-common-params: &common_params
+  - name: uc_catalog
+    default: "ahtsa"
+  - name: uc_schema
+    default: "awm"
+  - name: secret_key
+    default: "fmapi"
+  - name: limited_load
+    default: "false"
+  - name: history_start_date
+    default: "2023-01-01"
+
+x-serverless-env: &serverless_env
+  environment_key: "serverless"
+
+x-environments: &environments
+  - environment_key: "serverless"
+    spec:
+      client: "5"
+      dependencies:
+        - "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt"
+
+x-git: &git_source
+  git_url: https://github.com/Andrew-Tolbert/build-w-fmpapi
+  git_provider: gitHub
+  git_branch: main
+
 resources:
   jobs:
-    gs_awm_ingest:
-      name: "GS AWM | Data Ingest"
 
-      parameters:
-        - name: uc_catalog
-          default: "ahtsa"
-        - name: uc_schema
-          default: "awm"
-        - name: secret_key
-          default: "fmapi"
-        - name: limited_load
-          default: "true"
-        - name: history_start_date
-          default: "2023-01-01"
+    # ══════════════════════════════════════════════════════════════════════════
+    # DAILY — market data that changes every trading day
+    # Schedule: 6:00 AM UTC Mon–Fri (after US market close data is settled)
+    # Tasks: historical prices, analyst ratings, indexes/VIX, news
+    # DAG: prices → analyst → indexes → [news (log, parallel)]
+    # ══════════════════════════════════════════════════════════════════════════
+    gs_awm_ingest_daily:
+      name: "GS AWM | Data Ingest | Daily"
 
-      environments:
-        - environment_key: "serverless"
-          spec:
-            client: "5"
-            dependencies:
-              - "-r ${workspace.file_path}/requirements.txt"
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * MON-FRI"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
+
+      parameters: *common_params
+      git_source: *git_source
+      environments: *environments
 
       tasks:
-        # ── 1_FMAPI / no-log tasks — sequential chain ─────────────────────────
-        # (01 → 02 → 03 → 04 → 06 → 07 → 09)
-        # Tasks with log tables (05, 08, 10, 11) fan out in parallel after 09.
-
-        - task_key: fmapi_01_company_profiles
-          environment_key: "serverless"
-          notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/01_company_profiles"
-            base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
-
+        # ── Sequential chain (no log table) ───────────────────────────────────
         - task_key: fmapi_02_historical_prices
-          depends_on:
-            - task_key: fmapi_01_company_profiles
-          environment_key: "serverless"
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/02_historical_prices"
+            notebook_path: "pull_data/1_FMAPI/02_historical_prices"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
-
-        - task_key: fmapi_03_financials
-          depends_on:
-            - task_key: fmapi_02_historical_prices
-          environment_key: "serverless"
-          notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/03_financials"
-            base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
-
-        - task_key: fmapi_04_key_metrics
-          depends_on:
-            - task_key: fmapi_03_financials
-          environment_key: "serverless"
-          notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/04_key_metrics"
-            base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
-
-        - task_key: fmapi_06_etf_data
-          depends_on:
-            - task_key: fmapi_04_key_metrics
-          environment_key: "serverless"
-          notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/06_etf_data"
-            base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
 
         - task_key: fmapi_07_analyst_data
           depends_on:
-            - task_key: fmapi_06_etf_data
-          environment_key: "serverless"
+            - task_key: fmapi_02_historical_prices
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/07_analyst_data"
+            notebook_path: "pull_data/1_FMAPI/07_analyst_data"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
 
         - task_key: fmapi_09_indexes_and_vix
           depends_on:
             - task_key: fmapi_07_analyst_data
-          environment_key: "serverless"
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/09_indexes_and_vix"
+            notebook_path: "pull_data/1_FMAPI/09_indexes_and_vix"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
 
-        # ── 1_FMAPI / log-table tasks — parallel fan-out after fmapi_09 ───────
-        # (05_sec_filings, 08_news, 10_transcripts, 11_financial_reports)
-
-        - task_key: fmapi_05_sec_filings
-          depends_on:
-            - task_key: fmapi_09_indexes_and_vix
-          environment_key: "serverless"
-          notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/05_sec_filings"
-            base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
-
+        # ── Log-table tasks — parallel fan-out after indexes ──────────────────
         - task_key: fmapi_08_news
           depends_on:
             - task_key: fmapi_09_indexes_and_vix
-          environment_key: "serverless"
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/08_news"
+            notebook_path: "pull_data/1_FMAPI/08_news"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MONTHLY — reference data, filings, earnings; updated end-of-month
+    # Schedule: 3:00 AM UTC on the 1st of each month
+    # Tasks: company profiles, financials, key metrics, ETF data, SEC filings,
+    #        transcripts, financial reports, FactSet filings, EDGAR BDC signals
+    # DAG: profiles → financials → key_metrics → etf_data
+    #        → [sec_filings | transcripts | financial_reports] (log, parallel)
+    #      factset_filings and edgar_bdc run independently in parallel
+    # ══════════════════════════════════════════════════════════════════════════
+    gs_awm_ingest_monthly:
+      name: "GS AWM | Data Ingest | Monthly"
+
+      schedule:
+        quartz_cron_expression: "0 0 3 1 * ?"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
+
+      parameters: *common_params
+      git_source: *git_source
+      environments: *environments
+
+      tasks:
+        # ── Sequential chain (no log table) ───────────────────────────────────
+        - task_key: fmapi_01_company_profiles
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "pull_data/1_FMAPI/01_company_profiles"
+            base_parameters:
+              <<: *base_params
+
+        - task_key: fmapi_03_financials
+          depends_on:
+            - task_key: fmapi_01_company_profiles
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "pull_data/1_FMAPI/03_financials"
+            base_parameters:
+              <<: *base_params
+
+        - task_key: fmapi_04_key_metrics
+          depends_on:
+            - task_key: fmapi_03_financials
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "pull_data/1_FMAPI/04_key_metrics"
+            base_parameters:
+              <<: *base_params
+
+        - task_key: fmapi_06_etf_data
+          depends_on:
+            - task_key: fmapi_04_key_metrics
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "pull_data/1_FMAPI/06_etf_data"
+            base_parameters:
+              <<: *base_params
+
+        # ── Log-table tasks — parallel fan-out after etf_data ─────────────────
+        - task_key: fmapi_05_sec_filings
+          depends_on:
+            - task_key: fmapi_06_etf_data
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "pull_data/1_FMAPI/05_sec_filings"
+            base_parameters:
+              <<: *base_params
 
         - task_key: fmapi_10_transcripts
           depends_on:
-            - task_key: fmapi_09_indexes_and_vix
-          environment_key: "serverless"
+            - task_key: fmapi_06_etf_data
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/10_transcripts"
+            notebook_path: "pull_data/1_FMAPI/10_transcripts"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
 
         - task_key: fmapi_11_financial_reports
           depends_on:
-            - task_key: fmapi_09_indexes_and_vix
-          environment_key: "serverless"
+            - task_key: fmapi_06_etf_data
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/1_FMAPI/11_financial_reports"
+            notebook_path: "pull_data/1_FMAPI/11_financial_reports"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
 
-        # ── 2_FACTSET — independent, runs in parallel with all FMAPI tasks ────
+        # ── Independent tasks — run in parallel with FMAPI chain ──────────────
         - task_key: factset_01_filings
-          environment_key: "serverless"
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/2_FACTSET/01_factset_filings"
+            notebook_path: "pull_data/2_FACTSET/01_factset_filings"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
 
-        # ── 3_EDGAR — independent, runs in parallel with all FMAPI tasks ──────
         - task_key: edgar_01_bdc_early_warning
-          environment_key: "serverless"
+          <<: *serverless_env
           notebook_task:
-            notebook_path: "${workspace.file_path}/pull_data/3_EDGAR/01_bdc_early_warning"
+            notebook_path: "pull_data/3_EDGAR/01_bdc_early_warning"
             base_parameters:
-              uc_catalog: "{{job.parameters.uc_catalog}}"
-              uc_schema: "{{job.parameters.uc_schema}}"
-              secret_key: "{{job.parameters.secret_key}}"
-              limited_load: "{{job.parameters.limited_load}}"
-              history_start_date: "{{job.parameters.history_start_date}}"
+              <<: *base_params
