@@ -17,27 +17,49 @@
 # COMMAND ----------
 
 # # Uncomment to wipe the Delta table before re-running
-# spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles")
+#spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles")
 
 # COMMAND ----------
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles (
-        symbol            STRING,
-        companyName       STRING,
-        price             DOUBLE,
-        mktCap            DOUBLE,
-        beta              DOUBLE,
-        sector            STRING,
-        industry          STRING,
-        description       STRING,
-        ceo               STRING,
-        country           STRING,
-        exchangeShortName STRING,
-        dcf               DOUBLE,
-        isEtf             BOOLEAN,
-        cik               STRING,
-        ingested_at       STRING
+        symbol              STRING,
+        price               DOUBLE,
+        marketCap           LONG,
+        beta                DOUBLE,
+        lastDividend        DOUBLE,
+        range               STRING,
+        change              DOUBLE,
+        changePercentage    DOUBLE,
+        volume              DOUBLE,
+        averageVolume       LONG,
+        companyName         STRING,
+        currency            STRING,
+        cik                 STRING,
+        isin                STRING,
+        cusip               STRING,
+        exchangeFullName    STRING,
+        exchange            STRING,
+        industry            STRING,
+        website             STRING,
+        description         STRING,
+        ceo                 STRING,
+        sector              STRING,
+        country             STRING,
+        fullTimeEmployees   STRING,
+        phone               STRING,
+        address             STRING,
+        city                STRING,
+        state               STRING,
+        zip                 STRING,
+        image               STRING,
+        ipoDate             STRING,
+        defaultImage        BOOLEAN,
+        isEtf               BOOLEAN,
+        isActivelyTrading   BOOLEAN,
+        isAdr               BOOLEAN,
+        isFund              BOOLEAN,
+        ingested_at         STRING
     )
     USING DELTA
 """)

@@ -377,9 +377,11 @@ for suffix, table in [
     ("cashflow_growth",   "bronze_cashflow_growth"),
 ]:
     path = f"{base}/*/*_{suffix}.json"
+    target_schema = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.{table}").schema
     df = (
         spark.read
             .option("multiline", "true")
+            .schema(target_schema)
             .json(path)
             .withColumn("date", col("date").cast("date"))
     )
