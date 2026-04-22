@@ -27,17 +27,26 @@
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_etf_info (
-        symbol          STRING,
-        name            STRING,
-        description     STRING,
-        aum             DOUBLE,
-        expenseRatio    DOUBLE,
-        ytdReturn       DOUBLE,
-        oneYearReturn   DOUBLE,
-        threeYearReturn DOUBLE,
-        fiveYearReturn  DOUBLE,
-        holdingsCount   LONG,
-        ingested_at     STRING
+        symbol               STRING,
+        name                 STRING,
+        description          STRING,
+        isin                 STRING,
+        assetClass           STRING,
+        securityCusip        STRING,
+        domicile             STRING,
+        website              STRING,
+        etfCompany           STRING,
+        expenseRatio         DOUBLE,
+        assetsUnderManagement DOUBLE,
+        avgVolume            LONG,
+        inceptionDate        STRING,
+        nav                  DOUBLE,
+        navCurrency          STRING,
+        holdingsCount        LONG,
+        isActivelyTrading    BOOLEAN,
+        updatedAt            STRING,
+        sectorsList          ARRAY<STRUCT<industry: STRING, exposure: DOUBLE>>,
+        ingested_at          STRING
     )
     USING DELTA
 """)
@@ -46,14 +55,16 @@ spark.sql(f"""
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_etf_holdings (
+        symbol           STRING,
         etf_symbol       STRING,
         asset            STRING,
         name             STRING,
         isin             STRING,
-        cusip            STRING,
+        securityCusip    STRING,
+        sharesNumber     DOUBLE,
         weightPercentage DOUBLE,
         marketValue      DOUBLE,
-        exchange         STRING,
+        updatedAt        STRING,
         ingested_at      STRING
     )
     USING DELTA
@@ -63,6 +74,7 @@ spark.sql(f"""
 
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_etf_sectors (
+        symbol           STRING,
         etf_symbol       STRING,
         sector           STRING,
         weightPercentage DOUBLE,
@@ -87,4 +99,4 @@ for suffix, table in [
 
 # COMMAND ----------
 
-display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_etf_holdings").orderBy("etf_symbol", "weightPercentage").limit(100))
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_etf_holdings").orderBy("etf_symbol", col("weightPercentage").desc()).limit(100))
