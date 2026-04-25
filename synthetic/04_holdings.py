@@ -169,7 +169,21 @@ for _, account in accounts_df.iterrows():
     ips_cash_max  = profile["Cash"]["max"]
     cash_target   = min(buckets["Cash"], account_aum * ips_cash_max / 100.0)
     non_cash_budget = account_aum - cash_target
-    non_cash_raw    = {ac: v for ac, v in buckets.items() if ac != "Cash"}
+
+    # Build non-cash raw buckets, adjusting Private Credit before renormalization.
+    # Non-BDC accounts: drop PC entirely so that budget redistributes to other classes.
+    # BDC accounts: cap PC at 4% of AUM before scaling so the spend cap never creates
+    # a gap that would be silently discarded when the cash ceiling is applied.
+    non_cash_raw = {}
+    for ac, v in buckets.items():
+        if ac == "Cash":
+            continue
+        if ac == "Private Credit":
+            if not bdc_eligible:
+                continue                          # redistribute to other asset classes
+            v = min(v, account_aum * 0.04)       # cap at 4% before scaling
+        non_cash_raw[ac] = v
+
     non_cash_total  = sum(non_cash_raw.values()) or 1.0
     scaled_buckets  = {ac: v / non_cash_total * non_cash_budget for ac, v in non_cash_raw.items()}
 
