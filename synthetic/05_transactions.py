@@ -193,9 +193,14 @@ for _, account in accounts_df.iterrows():
         if ticker == "CASH":
             continue
 
-        annual_yield = div_yields.get(ticker, 0.015)
-        if annual_yield is None or annual_yield <= 0:
-            annual_yield = 0.015
+        # Use actual yield from bronze_financial_ratios where available.
+        # Ticker absent from table (e.g. ETFs) → fall back to 1.5%.
+        # Ticker present but yield = 0 (e.g. TSLA, AMZN, NVDA) → skip, no dividend.
+        annual_yield = div_yields.get(ticker)
+        if annual_yield is None:
+            annual_yield = 0.015  # ETF default
+        elif annual_yield <= 0:
+            continue              # non-dividend-paying equity
         quarterly_rate = annual_yield / 4
 
         for q_date in quarter_starts:
