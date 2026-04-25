@@ -69,7 +69,7 @@ IPS_PROFILES = {
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Moderate": {
-        "Equity":         (45.0, 35.0, 55.0),
+        "Equity":         (50.0, 40.0, 60.0),
         "Fixed Income":   (25.0, 15.0, 35.0),
         "ETF":            (15.0,  5.0, 20.0),
         "Alternatives":   ( 5.0,  0.0, 10.0),
