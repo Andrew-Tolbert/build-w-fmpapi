@@ -1,4 +1,11 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
+# ]
+# ///
 # Generate synthetic holdings as of the most recent price date in bronze_historical_prices.
 # Ticker universe and metadata come from bronze_company_profiles.
 # Current prices and cost basis come from bronze_historical_prices (adjClose).
@@ -274,4 +281,4 @@ print(f"Written {sdf.count()} rows to {uc_table('holdings')}")
 
 # COMMAND ----------
 
-spark.table(uc_table("holdings")).orderBy("account_id", "asset_class", "ticker").display()
+display(spark.table(uc_table("holdings")).orderBy("account_id", "asset_class", "ticker"))
