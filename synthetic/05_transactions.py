@@ -70,8 +70,8 @@ def get_price_on(ticker, target_date):
         return 1.0
     if ticker not in prices_by_symbol:
         return None
-    ser = prices_raw[prices_raw["symbol"] == ticker].set_index("date")["adjClose"]
-    dt  = pd.Timestamp(target_date)
+    ser   = prices_by_symbol[ticker]
+    dt    = pd.Timestamp(target_date)
     valid = ser[ser.index <= dt]
     return float(valid.iloc[-1]) if len(valid) > 0 else float(ser.iloc[0])
 
@@ -162,11 +162,18 @@ for _, account in accounts_df.iterrows():
 
         n_tranches = int(rng.integers(3, 6))
 
-        # Split quantity across tranches using Dirichlet weights; ensure integer shares
+        # Split quantity across tranches using Dirichlet weights.
+        # Alt fund quantities are fractional LP units — keep as float and skip int rounding.
+        is_fractional = ticker in ALT_FUND_NAVS
         raw_weights = rng.dirichlet(np.full(n_tranches, 2.0))
-        qtys = (raw_weights * total_qty).round().astype(int)
-        diff = int(total_qty) - qtys.sum()
-        qtys[0] += diff  # absorb rounding into first tranche
+        if is_fractional:
+            qtys = raw_weights * total_qty
+            qtys = np.round(qtys, 2)
+            qtys[-1] = round(total_qty - qtys[:-1].sum(), 2)  # absorb rounding into last
+        else:
+            qtys = (raw_weights * total_qty).round().astype(int)
+            diff = int(total_qty) - qtys.sum()
+            qtys[0] += diff  # absorb rounding into first tranche
 
         for i, qty in enumerate(qtys):
             if qty <= 0:
@@ -192,32 +199,29 @@ for _, account in accounts_df.iterrows():
                 "net_amount":  -(gross + fee),
             })
 
+    # Quarter starts are identical for dividends and fees — compute once
+    quarter_starts = quarter_starts_between(max(inception_date, price_start), today)
+
     # ── Quarterly DIVIDEND entries for income-generating positions ─────────────
     income_assets = {"Equity", "ETF", "Fixed Income", "Private Credit"}
     income_holdings = acct_holdings[acct_holdings["asset_class"].isin(income_assets)]
-
-    div_quarter_starts = quarter_starts_between(
-        max(inception_date, price_start),
-        today
-    )
 
     for _, holding in income_holdings.iterrows():
         ticker = holding["ticker"]
         if ticker == "CASH":
             continue
 
-        # Estimate quarterly dividend yield
         annual_yield = div_yields.get(ticker, 0.015)
         if annual_yield is None or annual_yield <= 0:
             annual_yield = 0.015
         quarterly_rate = annual_yield / 4
 
-        for q_date in div_quarter_starts:
+        for q_date in quarter_starts:
             price = get_price(ticker, q_date)
             if price is None:
                 continue
-            qty       = holding["quantity"]
-            div_amt   = round(qty * price * quarterly_rate, 2)
+            qty     = holding["quantity"]
+            div_amt = round(qty * price * quarterly_rate, 2)
             if div_amt <= 0:
                 continue
             all_txns.append({
@@ -234,12 +238,8 @@ for _, account in accounts_df.iterrows():
             })
 
     # ── Quarterly FEE entries (GS PWM advisory fee) ────────────────────────────
-    fee_quarter_starts = quarter_starts_between(
-        max(inception_date, price_start),
-        today
-    )
     quarterly_fee = round(account_aum * fee_rate / 4, 2)
-    for q_date in fee_quarter_starts:
+    for q_date in quarter_starts:
         all_txns.append({
             "trade_id":    str(uuid.uuid4()),
             "date":        q_date,

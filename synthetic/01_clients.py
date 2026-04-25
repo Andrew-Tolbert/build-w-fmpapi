@@ -105,7 +105,7 @@ for i in range(100):
         "client_name":    pattern.format(first=first, last=last),
         "tier":           "HNW",
         "risk_profile":   random.choice(HNW_PROFILES),
-        "total_aum":      round(float(hnw_aum[i - 150]), 2),
+        "total_aum":      round(float(hnw_aum[i]), 2),
         "base_currency":  "USD",
         "advisor_id":     random.choice(ADVISOR_IDS),
         "bdc_eligible":   False,
