@@ -9,7 +9,8 @@
 #
 # Asset class is preserved from the existing holdings table — it is not derivable
 # from transactions alone.
-# DIVIDEND and FEE transactions do not affect position quantity or cost basis.
+# BUY and DRIP transactions contribute to position quantity and cost basis.
+# DIVIDEND and FEE transactions affect only the cash balance.
 
 # COMMAND ----------
 
@@ -52,7 +53,7 @@ print(f"Price date:   {max_price_date}")
 # Net quantity  = SUM(quantity) for BUYs per (account_id, ticker)
 # Weighted cost = SUM(gross_amount) / SUM(quantity) for BUYs — true average cost
 
-buys = txns_df[txns_df["action"] == "BUY"].copy()
+buys = txns_df[txns_df["action"].isin(["BUY", "DRIP"])].copy()
 
 txn_positions = (
     buys.groupby(["account_id", "ticker"])
@@ -134,9 +135,6 @@ if len(qty_mismatches) > 0:
 asset_class_ref = holdings_df[holdings_df["ticker"] != "CASH"] \
     .set_index(["account_id", "ticker"])["asset_class"].to_dict()
 
-accounts_df = spark.table(uc_table("accounts")).toPandas() \
-    .set_index("account_id")["account_aum"].to_dict()
-
 rebuilt_rows = []
 
 for _, pos in txn_positions.iterrows():
@@ -167,11 +165,24 @@ for _, pos in txn_positions.iterrows():
 
 rebuilt_df = pd.DataFrame(rebuilt_rows)
 
-# Rebuild CASH row per account: account_aum minus sum of non-cash market values
-mv_by_account = rebuilt_df.groupby("account_id")["market_value"].sum()
+# Rebuild CASH row per account from the transactions ledger:
+#   initial deposit (CASH BUY quantity) + dividends received + fees paid
+# Use quantity for the initial deposit — net_amount on a CASH BUY is negative
+# (outflow convention) which would double-count the wrong sign.
+initial_cash = (
+    txns_df[txns_df["ticker"] == "CASH"]
+    .groupby("account_id")["quantity"].sum()
+)
+cash_adjustments = (
+    txns_df[txns_df["action"].isin(["DIVIDEND", "FEE", "DRIP"])]
+    .groupby("account_id")["net_amount"].sum()  # DIV positive; FEE and DRIP negative
+)
+cash_by_account = (
+    initial_cash.add(cash_adjustments, fill_value=0.0)
+).to_dict()
 
-for account_id, account_aum in accounts_df.items():
-    cash_amount = max(0.0, account_aum - mv_by_account.get(account_id, 0.0))
+for account_id in txns_df["account_id"].unique():
+    cash_amount = max(0.0, cash_by_account.get(account_id, 0.0))
     rebuilt_df = pd.concat([rebuilt_df, pd.DataFrame([{
         "date":                 max_price_date,
         "account_id":           account_id,

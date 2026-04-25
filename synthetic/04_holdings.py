@@ -156,31 +156,41 @@ for _, account in accounts_df.iterrows():
 
     buckets = {ac: account_aum * pct / 100 for ac, pct in actual_pcts.items()}
 
+    # ── Set cash explicitly from IPS bucket, capped at IPS max ────────────────
+    # Prevents cash absorbing excess drift. Non-cash budgets are renormalized
+    # to fill the remaining AUM after cash is reserved.
+    ips_cash_max  = profile["Cash"]["max"]
+    cash_target   = min(buckets["Cash"], account_aum * ips_cash_max / 100.0)
+    non_cash_budget = account_aum - cash_target
+    non_cash_raw    = {ac: v for ac, v in buckets.items() if ac != "Cash"}
+    non_cash_total  = sum(non_cash_raw.values()) or 1.0
+    scaled_buckets  = {ac: v / non_cash_total * non_cash_budget for ac, v in non_cash_raw.items()}
+
     rows = []
 
     # ── Equity ─────────────────────────────────────────────────────────────────
-    eq_budget = buckets.get("Equity", 0)
+    eq_budget = scaled_buckets.get("Equity", 0)
     if eq_budget > 0:
         n = int(rng.integers(8, 25))
         sample = list(rng.choice(equity_universe, size=min(n, len(equity_universe)), replace=False))
         rows += make_positions(sample, "Equity", eq_budget, inception_date, account_id)
 
     # ── ETF (broad market / sector) ────────────────────────────────────────────
-    etf_budget = buckets.get("ETF", 0)
+    etf_budget = scaled_buckets.get("ETF", 0)
     if etf_budget > 0:
         n = int(rng.integers(4, min(10, len(broad_etf_univ) + 1)))
         sample = list(rng.choice(broad_etf_univ, size=min(n, len(broad_etf_univ)), replace=False))
         rows += make_positions(sample, "ETF", etf_budget, inception_date, account_id)
 
     # ── Fixed Income ───────────────────────────────────────────────────────────
-    fi_budget = buckets.get("Fixed Income", 0)
+    fi_budget = scaled_buckets.get("Fixed Income", 0)
     if fi_budget > 0:
         n = int(rng.integers(3, min(7, len(fi_etf_univ) + 1)))
         sample = list(rng.choice(fi_etf_univ, size=min(n, len(fi_etf_univ)), replace=False))
         rows += make_positions(sample, "Fixed Income", fi_budget, inception_date, account_id)
 
     # ── Alternatives (real-asset ETFs only — GLD, SLV, DBC, VNQ) ─────────────
-    alt_budget = buckets.get("Alternatives", 0)
+    alt_budget = scaled_buckets.get("Alternatives", 0)
     if alt_budget > 0:
         n = int(rng.integers(2, len(alt_etf_univ) + 1))
         sample = list(rng.choice(alt_etf_univ, size=min(n, len(alt_etf_univ)), replace=False))
@@ -188,16 +198,16 @@ for _, account in accounts_df.iterrows():
 
     # ── Private Credit / BDC ───────────────────────────────────────────────────
     # Only for BDC-eligible clients; hard cap at 4% of account AUM.
-    pc_budget = buckets.get("Private Credit", 0)
+    pc_budget = scaled_buckets.get("Private Credit", 0)
     if pc_budget > 0 and bdc_eligible and bdc_universe:
         bdc_budget = min(pc_budget, account_aum * 0.04)
         n = int(rng.integers(1, 4))
         sample = list(rng.choice(bdc_universe, size=min(n, len(bdc_universe)), replace=False))
         rows += make_positions(sample, "Private Credit", bdc_budget, inception_date, account_id, concentration=3.0)
 
-    # ── Cash — absorbs remainder so SUM(market_value) == account_aum exactly ──
+    # ── Cash: IPS target + per-share rounding remainder ───────────────────────
     allocated_mv = sum(r["market_value"] for r in rows)
-    cash_amount  = max(0.0, account_aum - allocated_mv)
+    cash_amount  = max(0.0, cash_target + (non_cash_budget - allocated_mv))
     rows.append({
         "account_id":           account_id,
         "ticker":               "CASH",

@@ -223,6 +223,21 @@ for _, account in accounts_df.iterrows():
                 "fee_amount":   0.0,
                 "net_amount":   div_amt,
             })
+            # ── DRIP: reinvest dividend as whole shares, no commission ─────────
+            drip_qty = int(div_amt // price)
+            if drip_qty >= 1:
+                all_txns.append({
+                    "trade_id":     str(uuid.uuid4()),
+                    "date":         q_date,
+                    "account_id":   account_id,
+                    "ticker":       ticker,
+                    "action":       "DRIP",
+                    "quantity":     float(drip_qty),
+                    "price":        price,
+                    "gross_amount": drip_qty * price,
+                    "fee_amount":   0.0,
+                    "net_amount":   -(drip_qty * price),
+                })
 
     # ── Quarterly FEE entries (GS PWM advisory fee) ────────────────────────────
     quarterly_fee = round(account_aum * fee_rate / 4, 2)
