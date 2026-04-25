@@ -205,9 +205,10 @@ for _, account in accounts_df.iterrows():
         sample = list(rng.choice(bdc_universe, size=min(n, len(bdc_universe)), replace=False))
         rows += make_positions(sample, "Private Credit", bdc_budget, inception_date, account_id, concentration=3.0)
 
-    # ── Cash: IPS target + per-share rounding remainder ───────────────────────
+    # ── Cash: IPS target + rounding remainder, hard-capped at IPS max ─────────
     allocated_mv = sum(r["market_value"] for r in rows)
     cash_amount  = max(0.0, cash_target + (non_cash_budget - allocated_mv))
+    cash_amount  = min(cash_amount, account_aum * ips_cash_max / 100.0)
     rows.append({
         "account_id":           account_id,
         "ticker":               "CASH",

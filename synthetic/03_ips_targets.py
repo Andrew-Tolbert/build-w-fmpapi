@@ -74,7 +74,7 @@ IPS_PROFILES = {
         "ETF":            (15.0,  5.0, 20.0),
         "Alternatives":   ( 5.0,  0.0, 10.0),
         "Private Credit": ( 0.0,  0.0,  5.0),
-        "Cash":           (10.0,  2.0, 15.0),
+        "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Growth-HNW": {
         "Equity":         (55.0, 45.0, 65.0),
