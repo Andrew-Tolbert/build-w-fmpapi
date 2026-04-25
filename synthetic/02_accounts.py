@@ -46,7 +46,8 @@ HNW_ACCOUNT_TYPES = [
     "Separately Managed Account (SMA)",
 ]
 
-today = datetime.date.today()
+today         = datetime.date.today()
+history_start = datetime.date.fromisoformat(HISTORY_START_DATE)
 
 records = []
 account_counter = 1
@@ -77,9 +78,10 @@ for _, client in clients_df.iterrows():
 
     for idx, (acc_type, acc_aum) in enumerate(zip(account_types, account_aums)):
         # Primary account opens close to client inception; subsequent ones lag slightly
-        days_offset = random.randint(0, 30) if idx == 0 else random.randint(30, 365)
+        days_offset = random.randint(0, 30) if idx == 0 else random.randint(30, 180)
         incep = client_incep + datetime.timedelta(days=days_offset)
-        incep = min(incep, today - datetime.timedelta(days=365))
+        # Floor at history_start (no positions before price data); cap 30 days ago
+        incep = max(history_start, min(incep, today - datetime.timedelta(days=30)))
 
         records.append({
             "account_id":     f"ACC{account_counter:05d}",

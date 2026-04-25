@@ -66,11 +66,15 @@ hnw_raw = np.random.lognormal(mean=17.5, sigma=0.8, size=100)
 hnw_aum = (hnw_raw / hnw_raw.sum()) * 5_000_000_000
 
 import datetime
-today = datetime.date.today()
+today         = datetime.date.today()
+history_start = datetime.date.fromisoformat(HISTORY_START_DATE)
 
-def random_inception(years_min=1, years_max=12):
-    days_back = random.randint(years_min * 365, years_max * 365)
-    return today - datetime.timedelta(days=days_back)
+def random_inception():
+    # Spread inception dates across [history_start, today - 90 days] so every
+    # client has at least a quarter of transaction history.
+    latest     = today - datetime.timedelta(days=90)
+    days_range = (latest - history_start).days
+    return history_start + datetime.timedelta(days=random.randint(0, days_range))
 
 records = []
 client_counter = 1
@@ -91,7 +95,7 @@ for i in range(150):
         "bdc_eligible":   False,
         "tone_profile":   random.choice(TONE_PROFILES),
         "contact_pref":   random.choice(CONTACT_PREFS),
-        "inception_date": random_inception(1, 12),
+        "inception_date": random_inception(),
     })
     client_counter += 1
 
@@ -111,7 +115,7 @@ for i in range(100):
         "bdc_eligible":   False,
         "tone_profile":   random.choice(TONE_PROFILES),
         "contact_pref":   random.choice(CONTACT_PREFS),
-        "inception_date": random_inception(1, 8),
+        "inception_date": random_inception(),
     })
     client_counter += 1
 
