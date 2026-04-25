@@ -1,0 +1,303 @@
+# Databricks notebook source
+# Generate synthetic holdings as of the most recent price date in bronze_historical_prices.
+# Ticker universe and metadata come from bronze_company_profiles.
+# Current prices and cost basis come from bronze_historical_prices (adjClose).
+# BDC exposure is capped at 4% of account AUM regardless of IPS target.
+# IPS drift calibrated so ~10% of accounts show at least one asset class outside min/max.
+# Target: {catalog}.{schema}.holdings
+
+# COMMAND ----------
+
+# MAGIC %run ../utils/ingest_config
+
+# COMMAND ----------
+
+import random
+import numpy as np
+import pandas as pd
+from pyspark.sql.functions import current_timestamp
+
+rng = np.random.default_rng(44)
+random.seed(44)
+
+uc_table = lambda name: f"{UC_CATALOG}.{UC_SCHEMA}.{name}"
+
+# COMMAND ----------
+
+# # Uncomment to drop and fully recreate:
+# spark.sql(f"DROP TABLE IF EXISTS {uc_table('holdings')}")
+
+# COMMAND ----------
+
+# ── Ticker universe from TICKER_CONFIG (ignores LIMITED_LOAD widget) ───────────
+# Using TICKER_CONFIG directly ensures we get the full universe regardless of run mode.
+FIXED_INCOME_ETFS = {"AGG", "TLT", "LQD", "HYG", "JNK", "EMB", "BIL", "SHY", "BKLN"}
+ALT_ETFS          = {"GLD", "SLV", "DBC", "VNQ"}
+
+equity_universe  = [s for s, c in TICKER_CONFIG.items() if c["type"] == "equity"]
+bdc_universe     = [s for s, c in TICKER_CONFIG.items() if c["type"] == "private_credit"]
+all_etfs         = [s for s, c in TICKER_CONFIG.items() if c["type"] == "etf"]
+broad_etf_univ   = [s for s in all_etfs if s not in FIXED_INCOME_ETFS and s not in ALT_ETFS]
+fi_etf_univ      = [s for s in all_etfs if s in FIXED_INCOME_ETFS]
+alt_etf_univ     = [s for s in all_etfs if s in ALT_ETFS]
+
+print(f"Equities: {len(equity_universe)} | ETFs: {len(broad_etf_univ)} broad, {len(fi_etf_univ)} fixed income, {len(alt_etf_univ)} alts | BDCs: {len(bdc_universe)}")
+
+# COMMAND ----------
+
+# Synthetic PE/hedge fund stubs — used in Alternative Investment Vehicle accounts (UHNW only)
+# Price represents NAV per unit; quantity is number of LP units held.
+ALT_FUNDS = [
+    {"ticker": "GS_VINTAGE_IX",  "asset_class": "Alternatives", "price": 1000.0},
+    {"ticker": "GS_GROWTH_EQ3",  "asset_class": "Alternatives", "price": 2500.0},
+    {"ticker": "GS_INFRA_II",    "asset_class": "Alternatives", "price": 1500.0},
+    {"ticker": "GS_REAL_ASST4",  "asset_class": "Alternatives", "price": 1200.0},
+    {"ticker": "GS_MACRO_OPP",   "asset_class": "Alternatives", "price":  500.0},
+]
+
+# COMMAND ----------
+
+# ── Load reference tables ──────────────────────────────────────────────────────
+clients_df  = spark.table(uc_table("clients")).toPandas()
+accounts_df = spark.table(uc_table("accounts")).toPandas()
+ips_df      = spark.table(uc_table("ips_targets")).toPandas()
+
+print(f"Clients: {len(clients_df)} | Accounts: {len(accounts_df)}")
+
+# COMMAND ----------
+
+# ── Load prices: current prices and cost-basis history ────────────────────────
+# Load full price history once into Pandas — ~60 tickers × ~2yr daily = ~30k rows.
+prices_raw = spark.table(uc_table("bronze_historical_prices")) \
+    .select("symbol", "date", "adjClose") \
+    .toPandas()
+prices_raw["date"] = pd.to_datetime(prices_raw["date"])
+prices_raw = prices_raw.sort_values(["symbol", "date"])
+
+max_price_date = prices_raw["date"].max().date()
+print(f"Price history: {len(prices_raw)} rows | Latest date: {max_price_date}")
+
+# Latest price per symbol (for current market value)
+latest_prices = (
+    prices_raw[prices_raw["date"] == prices_raw["date"].max()]
+    .set_index("symbol")["adjClose"]
+    .to_dict()
+)
+
+# Per-symbol sorted time series for cost-basis lookups
+prices_by_symbol = {
+    sym: grp.set_index("date")["adjClose"].sort_index()
+    for sym, grp in prices_raw.groupby("symbol")
+}
+
+def get_cost_basis(ticker, inception_date):
+    """Return the adjClose on or before inception_date; falls back to earliest available."""
+    if ticker not in prices_by_symbol:
+        return latest_prices.get(ticker, 1.0)
+    ser = prices_by_symbol[ticker]
+    dt  = pd.Timestamp(inception_date)
+    valid = ser[ser.index <= dt]
+    return float(valid.iloc[-1]) if len(valid) > 0 else float(ser.iloc[0])
+
+# COMMAND ----------
+
+# ── IPS targets as nested dict ─────────────────────────────────────────────────
+ips_dict = {}
+for _, row in ips_df.iterrows():
+    ips_dict.setdefault(row["risk_profile"], {})[row["asset_class"]] = {
+        "target": row["target_allocation_pct"],
+        "min":    row["min_allocation_pct"],
+        "max":    row["max_allocation_pct"],
+    }
+
+# ── Client lookup ──────────────────────────────────────────────────────────────
+client_lookup = clients_df.set_index("client_id").to_dict(orient="index")
+
+# COMMAND ----------
+
+# ── Holdings construction ──────────────────────────────────────────────────────
+
+def make_positions(tickers, asset_class, budget, inception_date, account_id, concentration=2.0):
+    """Sample tickers from a list, weight by Dirichlet, return holdings rows."""
+    rows = []
+    valid = [t for t in tickers if t in latest_prices and latest_prices[t] > 0]
+    if not valid or budget <= 0:
+        return rows
+    weights = rng.dirichlet(np.full(len(valid), concentration))
+    for ticker, w in zip(valid, weights):
+        dollar_amt = budget * w
+        price = latest_prices[ticker]
+        qty   = max(1.0, round(dollar_amt / price))
+        cb    = get_cost_basis(ticker, inception_date)
+        rows.append({
+            "account_id":           account_id,
+            "ticker":               ticker,
+            "asset_class":          asset_class,
+            "quantity":             qty,
+            "price":                price,
+            "market_value":         qty * price,
+            "cost_basis_per_share": cb,
+            "total_cost_basis":     qty * cb,
+            "unrealized_gl":        qty * (price - cb),
+        })
+    return rows
+
+all_holdings = []
+
+for _, account in accounts_df.iterrows():
+    account_id    = account["account_id"]
+    account_aum   = account["account_aum"]
+    account_type  = account["account_type"]
+    inception_date = pd.Timestamp(account["inception_date"]).date()
+
+    client      = client_lookup[account["client_id"]]
+    risk_profile = client["risk_profile"]
+    tier         = client["tier"]
+    bdc_eligible = client["bdc_eligible"]
+
+    # ── Apply Gaussian drift to IPS targets ────────────────────────────────────
+    # sigma = (max - min) / 8 → ~10% of accounts drift outside band
+    profile = ips_dict[risk_profile]
+    raw_pcts = {}
+    for ac, bounds in profile.items():
+        sigma = (bounds["max"] - bounds["min"]) / 8.0
+        raw_pcts[ac] = max(0.0, bounds["target"] + rng.normal(0, sigma))
+    total_pct = sum(raw_pcts.values())
+    actual_pcts = {ac: v / total_pct * 100 for ac, v in raw_pcts.items()}
+
+    buckets = {ac: account_aum * pct / 100 for ac, pct in actual_pcts.items()}
+
+    rows = []
+
+    # ── Equity ─────────────────────────────────────────────────────────────────
+    eq_budget = buckets.get("Equity", 0)
+    if eq_budget > 0:
+        n = int(rng.integers(8, 25))
+        sample = list(rng.choice(equity_universe, size=min(n, len(equity_universe)), replace=False))
+        rows += make_positions(sample, "Equity", eq_budget, inception_date, account_id)
+
+    # ── ETF (broad market / sector) ────────────────────────────────────────────
+    etf_budget = buckets.get("ETF", 0)
+    if etf_budget > 0:
+        n = int(rng.integers(4, min(10, len(broad_etf_univ) + 1)))
+        sample = list(rng.choice(broad_etf_univ, size=min(n, len(broad_etf_univ)), replace=False))
+        rows += make_positions(sample, "ETF", etf_budget, inception_date, account_id)
+
+    # ── Fixed Income ───────────────────────────────────────────────────────────
+    fi_budget = buckets.get("Fixed Income", 0)
+    if fi_budget > 0:
+        n = int(rng.integers(3, min(7, len(fi_etf_univ) + 1)))
+        sample = list(rng.choice(fi_etf_univ, size=min(n, len(fi_etf_univ)), replace=False))
+        rows += make_positions(sample, "Fixed Income", fi_budget, inception_date, account_id)
+
+    # ── Alternatives ───────────────────────────────────────────────────────────
+    alt_budget = buckets.get("Alternatives", 0)
+    if alt_budget > 0:
+        use_pe = (tier == "UHNW" and account_type == "Alternative Investment Vehicle")
+        etf_share = 0.5 if use_pe else 1.0
+
+        # Real-asset ETFs portion
+        etf_alt_budget = alt_budget * etf_share
+        n = int(rng.integers(2, len(alt_etf_univ) + 1))
+        sample = list(rng.choice(alt_etf_univ, size=min(n, len(alt_etf_univ)), replace=False))
+        rows += make_positions(sample, "Alternatives", etf_alt_budget, inception_date, account_id)
+
+        # Synthetic PE/hedge fund units for qualifying accounts
+        if use_pe:
+            pe_budget = alt_budget * 0.5
+            n_pe = int(rng.integers(1, 4))
+            pe_selection = list(rng.choice(len(ALT_FUNDS), size=min(n_pe, len(ALT_FUNDS)), replace=False))
+            pe_funds = [ALT_FUNDS[i] for i in pe_selection]
+            pe_weights = rng.dirichlet(np.full(len(pe_funds), 2.0))
+            for fund, w in zip(pe_funds, pe_weights):
+                price = fund["price"]
+                dollar_amt = pe_budget * w
+                qty = max(1.0, round(dollar_amt / price, 2))
+                # PE funds appreciate: cost basis is 70–95% of current NAV
+                cb = price * float(rng.uniform(0.70, 0.95))
+                rows.append({
+                    "account_id":           account_id,
+                    "ticker":               fund["ticker"],
+                    "asset_class":          "Alternatives",
+                    "quantity":             qty,
+                    "price":                price,
+                    "market_value":         qty * price,
+                    "cost_basis_per_share": cb,
+                    "total_cost_basis":     qty * cb,
+                    "unrealized_gl":        qty * (price - cb),
+                })
+
+    # ── Private Credit / BDC ───────────────────────────────────────────────────
+    # Only for BDC-eligible clients; hard cap at 4% of account AUM.
+    pc_budget = buckets.get("Private Credit", 0)
+    if pc_budget > 0 and bdc_eligible and bdc_universe:
+        bdc_budget = min(pc_budget, account_aum * 0.04)
+        n = int(rng.integers(1, 4))
+        sample = list(rng.choice(bdc_universe, size=min(n, len(bdc_universe)), replace=False))
+        rows += make_positions(sample, "Private Credit", bdc_budget, inception_date, account_id, concentration=3.0)
+
+    # ── Cash — absorbs remainder so SUM(market_value) == account_aum exactly ──
+    allocated_mv = sum(r["market_value"] for r in rows)
+    cash_amount  = max(0.0, account_aum - allocated_mv)
+    rows.append({
+        "account_id":           account_id,
+        "ticker":               "CASH",
+        "asset_class":          "Cash",
+        "quantity":             cash_amount,
+        "price":                1.0,
+        "market_value":         cash_amount,
+        "cost_basis_per_share": 1.0,
+        "total_cost_basis":     cash_amount,
+        "unrealized_gl":        0.0,
+    })
+
+    for r in rows:
+        r["date"] = max_price_date
+    all_holdings.extend(rows)
+
+holdings_df = pd.DataFrame(all_holdings)
+
+# COMMAND ----------
+
+# ── Validation ─────────────────────────────────────────────────────────────────
+
+# AUM reconciliation
+mv_by_account = holdings_df.groupby("account_id")["market_value"].sum().reset_index(name="total_mv")
+mv_check = mv_by_account.merge(accounts_df[["account_id", "account_aum"]], on="account_id")
+mv_check["diff_pct"] = (mv_check["total_mv"] - mv_check["account_aum"]).abs() / mv_check["account_aum"] * 100
+print(f"Holdings generated: {len(holdings_df)}")
+print(f"  Accounts covered: {holdings_df['account_id'].nunique()}")
+print(f"  Total market value: ${holdings_df['market_value'].sum() / 1e9:.2f}B")
+print(f"  Max AUM diff: {mv_check['diff_pct'].max():.2f}%  (cash absorbs rounding)")
+
+# BDC exposure check
+bdc_holdings = holdings_df[holdings_df["asset_class"] == "Private Credit"]
+if len(bdc_holdings) > 0:
+    bdc_pct_by_acct = (
+        bdc_holdings.groupby("account_id")["market_value"].sum()
+        / accounts_df.set_index("account_id")["account_aum"]
+        * 100
+    ).dropna()
+    print(f"  BDC exposure max: {bdc_pct_by_acct.max():.2f}% (cap is 4%)")
+
+# Drift check: how many accounts have ≥1 asset class outside IPS band
+drift_accounts = 0
+for _, account in accounts_df.iterrows():
+    client    = client_lookup[account["client_id"]]
+    profile   = ips_dict[client["risk_profile"]]
+    acct_mv   = holdings_df[holdings_df["account_id"] == account["account_id"]].groupby("asset_class")["market_value"].sum()
+    total_mv  = acct_mv.sum()
+    if total_mv == 0:
+        continue
+    for ac, bounds in profile.items():
+        pct = acct_mv.get(ac, 0) / total_mv * 100
+        if pct < bounds["min"] or pct > bounds["max"]:
+            drift_accounts += 1
+            break
+print(f"  Accounts with IPS drift: {drift_accounts} / {len(accounts_df)} ({drift_accounts/len(accounts_df)*100:.1f}%)")
+
+# COMMAND ----------
+
+sdf = spark.createDataFrame(holdings_df).withColumn("ingested_at", current_timestamp())
+sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("holdings"))
+print(f"Written {sdf.count()} rows to {uc_table('holdings')}")

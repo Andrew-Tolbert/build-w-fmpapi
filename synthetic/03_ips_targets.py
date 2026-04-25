@@ -1,8 +1,8 @@
 # Databricks notebook source
-# Generate Investment Policy Statement (IPS) allocation targets per client.
-# Each IPS profile defines target/min/max for 6 asset classes summing to 100%.
-# UHNW profiles include Private Credit; HNW profiles do not.
-# Target: {catalog}.{schema}.client_ips_targets
+# Generate IPS allocation targets per risk profile.
+# This is a reference table keyed by risk_profile (not per-client).
+# 7 profiles × 6 asset classes = 42 rows.
+# Target: {catalog}.{schema}.ips_targets
 
 # COMMAND ----------
 
@@ -17,17 +17,12 @@ uc_table = lambda name: f"{UC_CATALOG}.{UC_SCHEMA}.{name}"
 
 # COMMAND ----------
 
-# Uncomment to drop and fully recreate:
-# spark.sql(f"DROP TABLE IF EXISTS {uc_table('client_ips_targets')}")
+# # Uncomment to drop and fully recreate:
+# spark.sql(f"DROP TABLE IF EXISTS {uc_table('ips_targets')}")
 
 # COMMAND ----------
 
-clients_df = spark.table(uc_table("clients")).toPandas()
-print(f"Loaded {len(clients_df)} clients")
-
-# COMMAND ----------
-
-# ips_profile → {asset_class: (target_pct, min_pct, max_pct)}
+# risk_profile → {asset_class: (target_pct, min_pct, max_pct)}
 # All profiles sum to 100% at target.
 
 IPS_PROFILES = {
@@ -94,26 +89,25 @@ IPS_PROFILES = {
 # COMMAND ----------
 
 records = []
-for _, client in clients_df.iterrows():
-    profile = client["ips_profile"]
-    for asset_class, (target, lo, hi) in IPS_PROFILES[profile].items():
+for profile, asset_classes in IPS_PROFILES.items():
+    total = sum(t for t, _, _ in asset_classes.values())
+    assert abs(total - 100.0) < 0.01, f"Profile {profile} targets sum to {total}, expected 100"
+    for asset_class, (target, lo, hi) in asset_classes.items():
         records.append({
-            "client_id":             client["client_id"],
-            "ips_profile":           profile,
-            "asset_class":           asset_class,
-            "target_allocation_pct": target,
-            "min_allocation_pct":    lo,
-            "max_allocation_pct":    hi,
-            "rebalance_trigger_pct": round(hi - target, 1),
+            "risk_profile":           profile,
+            "asset_class":            asset_class,
+            "target_allocation_pct":  target,
+            "min_allocation_pct":     lo,
+            "max_allocation_pct":     hi,
+            "rebalance_trigger_pct":  round(hi - target, 1),
         })
 
 ips_df = pd.DataFrame(records)
-print(f"Generated {len(ips_df)} IPS rows across {len(clients_df)} clients")
-print(ips_df.groupby("ips_profile")["client_id"].nunique().reset_index(name="clients"))
+print(f"Generated {len(ips_df)} IPS rows across {ips_df['risk_profile'].nunique()} profiles")
+print(ips_df.groupby("risk_profile")["target_allocation_pct"].sum().reset_index(name="total_pct").to_string(index=False))
 
 # COMMAND ----------
 
-target = uc_table("client_ips_targets")
 sdf = spark.createDataFrame(ips_df).withColumn("ingested_at", current_timestamp())
-sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(target)
-print(f"Written {sdf.count()} rows to {target}")
+sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("ips_targets"))
+print(f"Written {sdf.count()} rows to {uc_table('ips_targets')}")

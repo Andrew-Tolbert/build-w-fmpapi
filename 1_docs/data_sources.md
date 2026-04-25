@@ -7,9 +7,21 @@
 
 ## Overview
 
-Data for this demo falls into three layers:
+### Data Architecture: Two Distinct Layers
 
-| Layer | Source | Rationale |
+This pipeline is organized into two tiers that serve different purposes:
+
+**Raw Data Layer** — Files stored in UC Volumes (`/Volumes/{catalog}/{schema}/raw_fmapi/`). These are the unmodified responses from external APIs and EDGAR: JSON files from FMP endpoints, HTML documents from EDGAR, and CSV exports from XBRL parsing. The `pull_data/` notebooks produce this layer. Raw data is the source of truth for re-ingestion; nothing in this layer is transformed or enriched.
+
+**Lakehouse Data Layer** — Delta tables registered in Unity Catalog (`{catalog}.{schema}.*`). These are built from the raw volume files by the `ingest_data/` notebooks using Spark and Autoloader. All analytics, agent queries, and Genie workspaces query this layer. Follows medallion architecture: **Bronze** tables are direct representations of the raw files (type-cast and schema-enforced but otherwise unmodified); Silver and Gold layers are planned for enrichment and cross-source joins.
+
+---
+
+### Source Content Overview
+
+Data for this demo falls into three content areas:
+
+| Content Area | Source | Rationale |
 |---|---|---|
 | **Market & Financial Data** | Real — FMP API (11 notebooks) | Live prices, ratios, filings, and transcripts for real securities. LLM extracts genuine covenant language, real management tone, real earnings numbers. |
 | **BDC Early-Warning Signals** | Real — SEC EDGAR via XBRL (1 notebook) | Direct XBRL parsing of 10-K/10-Q filings for 17 BDCs. Produces PIK, NII, NAV/share, and unrealized depreciation time series — the early-warning layer for private credit risk. |
@@ -745,6 +757,482 @@ Generated using Python Faker in Databricks. Registered in Unity Catalog.
 | `example_email_text` | Verbatim past email (sanitized) |
 | `tone_label` | Formal / Conversational / Relationship-first |
 | `communication_context` | Situation that prompted the email |
+
+---
+
+## Part 4 — Lakehouse Data (`{catalog}.{schema}` in Unity Catalog)
+
+All tables live in the configured catalog and schema. Bronze tables are built by the `ingest_data/` notebooks from the raw volume files. Two ingestion patterns are used:
+
+- **Overwrite** (`CREATE OR REPLACE TABLE` + `df.write.mode("overwrite")`) — used for full-refresh sources where every run replaces the entire table.
+- **Autoloader** (`spark.readStream.format("cloudFiles")` + `trigger(availableNow=True)`) — used for append-only sources where new files must be merged without reprocessing the full history. Checkpoints are stored at `UC_VOLUME_PATH/_checkpoints/{table_name}`.
+
+---
+
+### B1. `bronze_historical_prices`
+
+**Source volume:** `raw_fmapi/historical_prices/{TICKER}/*.json`  
+**Built by:** `ingest_data/01_historical_prices.py`  
+**Ingestion pattern:** Overwrite (full refresh on every run)  
+**Refresh cadence:** Daily
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker symbol |
+| `date` | DATE | Trading date |
+| `adjOpen` | DOUBLE | Dividend-adjusted open price |
+| `adjHigh` | DOUBLE | Dividend-adjusted intraday high |
+| `adjLow` | DOUBLE | Dividend-adjusted intraday low |
+| `adjClose` | DOUBLE | Dividend-adjusted close price |
+| `volume` | LONG | Shares traded |
+| `ingested_at` | STRING | ISO 8601 fetch timestamp |
+
+---
+
+### B2. `bronze_company_profiles`
+
+**Source volume:** `raw_fmapi/company_profiles/{TICKER}/*.json`  
+**Built by:** `ingest_data/02_company_profiles.py`  
+**Ingestion pattern:** Overwrite (full refresh on every run)  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker symbol |
+| `companyName` | STRING | Legal entity name |
+| `price` | DOUBLE | Current market price |
+| `marketCap` | LONG | Market capitalization |
+| `beta` | DOUBLE | Market beta |
+| `sector` | STRING | GICS sector |
+| `industry` | STRING | GICS industry sub-sector |
+| `description` | STRING | Business description |
+| `ceo` | STRING | CEO name |
+| `cik` | STRING | SEC CIK (10-digit, zero-padded) |
+| `isin` | STRING | ISIN |
+| `cusip` | STRING | CUSIP |
+| `exchange` | STRING | Exchange short name |
+| `exchangeFullName` | STRING | Full exchange name |
+| `country` | STRING | Country code |
+| `currency` | STRING | Reporting currency |
+| `isEtf` | BOOLEAN | ETF flag |
+| `isActivelyTrading` | BOOLEAN | Active trading flag |
+| `ipoDate` | STRING | IPO date |
+| `fullTimeEmployees` | STRING | Headcount |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B3. `bronze_income_statements`
+
+**Source volume:** `raw_fmapi/financials/{TICKER}/*_income_statements.json`  
+**Built by:** `ingest_data/03_financials.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `date` | DATE | Period end date |
+| `fiscalYear` | STRING | Fiscal year |
+| `period` | STRING | "Q1"–"Q4" |
+| `revenue` | DOUBLE | Total revenue |
+| `grossProfit` | DOUBLE | Gross profit |
+| `ebitda` | DOUBLE | EBITDA — leverage covenant denominator |
+| `ebit` | DOUBLE | EBIT |
+| `operatingIncome` | DOUBLE | Operating income |
+| `netIncome` | DOUBLE | Net income |
+| `interestExpense` | DOUBLE | Interest expense — coverage covenant input |
+| `eps` | DOUBLE | Basic EPS |
+| `epsDiluted` | DOUBLE | Diluted EPS |
+| `cik` | STRING | SEC CIK |
+| `filingDate` | STRING | SEC filing date |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B4. `bronze_balance_sheets`
+
+**Source volume:** `raw_fmapi/financials/{TICKER}/*_balance_sheets.json`  
+**Built by:** `ingest_data/03_financials.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `date` | DATE | Period end date |
+| `fiscalYear` | STRING | Fiscal year |
+| `period` | STRING | Quarter |
+| `totalAssets` | DOUBLE | Total assets |
+| `totalLiabilities` | DOUBLE | Total liabilities |
+| `totalStockholdersEquity` | DOUBLE | Book equity |
+| `cashAndCashEquivalents` | DOUBLE | Cash and equivalents |
+| `totalDebt` | DOUBLE | Total debt (short + long) |
+| `longTermDebt` | DOUBLE | Long-term debt |
+| `shortTermDebt` | DOUBLE | Current portion of LTD |
+| `netDebt` | DOUBLE | Total debt minus cash — covenant numerator |
+| `goodwillAndIntangibleAssets` | DOUBLE | Goodwill + intangibles |
+| `retainedEarnings` | DOUBLE | Retained earnings |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B5. `bronze_cash_flows`
+
+**Source volume:** `raw_fmapi/financials/{TICKER}/*_cash_flows.json`  
+**Built by:** `ingest_data/03_financials.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `date` | DATE | Period end date |
+| `fiscalYear` | STRING | Fiscal year |
+| `period` | STRING | Quarter |
+| `operatingCashFlow` | DOUBLE | Cash from operations |
+| `capitalExpenditure` | DOUBLE | Capex (negative) |
+| `freeCashFlow` | DOUBLE | Operating CF + Capex — DSCR proxy input |
+| `depreciationAndAmortization` | DOUBLE | D&A |
+| `netDividendsPaid` | DOUBLE | Dividends paid |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B6. `bronze_income_growth` / `bronze_balance_growth` / `bronze_cashflow_growth`
+
+**Source volumes:** `raw_fmapi/financials/{TICKER}/*_income_growth.json`, `*_balance_growth.json`, `*_cashflow_growth.json`  
+**Built by:** `ingest_data/03_financials.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+Same `(symbol, date, fiscalYear, period)` key as the base statements. All value columns are YoY % change fields prefixed with `growth` (e.g., `growthRevenue`, `growthEBITDA`, `growthNetDebt`, `growthFreeCashFlow`). Used for trend analysis without requiring self-joins on base tables.
+
+---
+
+### B7. `bronze_key_metrics`
+
+**Source volume:** `raw_fmapi/key_metrics/{TICKER}/*_key_metrics.json`  
+**Built by:** `ingest_data/04_key_metrics.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `date` | DATE | Period end date |
+| `fiscalYear` | STRING | Fiscal year |
+| `period` | STRING | Quarter |
+| `netDebtToEBITDA` | DOUBLE | Primary leverage covenant proxy |
+| `evToEBITDA` | DOUBLE | EV / EBITDA multiple |
+| `currentRatio` | DOUBLE | Liquidity ratio |
+| `returnOnEquity` | DOUBLE | ROE |
+| `returnOnAssets` | DOUBLE | ROA |
+| `returnOnInvestedCapital` | DOUBLE | ROIC |
+| `marketCap` | DOUBLE | Market cap |
+| `enterpriseValue` | DOUBLE | Enterprise value |
+| `earningsYield` | DOUBLE | Inverse P/E |
+| `freeCashFlowYield` | DOUBLE | FCF / market cap |
+| `workingCapital` | DOUBLE | Working capital |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B8. `bronze_financial_ratios`
+
+**Source volume:** `raw_fmapi/key_metrics/{TICKER}/*_financial_ratios.json`  
+**Built by:** `ingest_data/04_key_metrics.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `date` | DATE | Period end date |
+| `fiscalYear` | STRING | Fiscal year |
+| `period` | STRING | Quarter |
+| `netProfitMargin` | DOUBLE | Net income / revenue |
+| `grossProfitMargin` | DOUBLE | Gross profit / revenue |
+| `ebitdaMargin` | DOUBLE | EBITDA / revenue |
+| `operatingProfitMargin` | DOUBLE | EBIT / revenue |
+| `returnOnEquity` | DOUBLE | ROE |
+| `returnOnAssets` | DOUBLE | ROA |
+| `debtToAssetsRatio` | DOUBLE | Total debt / total assets |
+| `interestCoverageRatio` | DOUBLE | EBIT / interest expense — secondary covenant proxy |
+| `debtServiceCoverageRatio` | DOUBLE | DSCR |
+| `currentRatio` | DOUBLE | Current assets / current liabilities |
+| `quickRatio` | DOUBLE | (Current assets − inventory) / current liabilities |
+| `freeCashFlowPerShare` | DOUBLE | FCF per share |
+| `dividendYield` | DOUBLE | Dividend yield |
+| `enterpriseValueMultiple` | DOUBLE | EV / EBITDA |
+| `priceToEarningsRatio` | DOUBLE | P/E |
+| `priceToBookRatio` | DOUBLE | P/B |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B9. `bronze_etf_info`
+
+**Source volume:** `raw_fmapi/etf_data/{TICKER}/*_etf_info.json`  
+**Built by:** `ingest_data/06_etf_data.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | ETF ticker |
+| `name` | STRING | Full fund name |
+| `description` | STRING | Fund objective/mandate |
+| `assetClass` | STRING | Asset class (e.g., "Equity", "Fixed Income") |
+| `assetsUnderManagement` | DOUBLE | AUM |
+| `expenseRatio` | DOUBLE | Annual fee as decimal |
+| `nav` | DOUBLE | Net asset value |
+| `holdingsCount` | LONG | Number of underlying securities |
+| `isActivelyTrading` | BOOLEAN | Active trading flag |
+| `sectorsList` | ARRAY<STRUCT<industry:STRING, exposure:DOUBLE>> | Sector breakdown |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B10. `bronze_etf_holdings`
+
+**Source volume:** `raw_fmapi/etf_data/{TICKER}/*_etf_holdings.json`  
+**Built by:** `ingest_data/06_etf_data.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `etf_symbol` | STRING | Parent ETF ticker |
+| `symbol` | STRING | Underlying security ticker |
+| `asset` | STRING | Asset name |
+| `name` | STRING | Security name |
+| `isin` | STRING | ISIN |
+| `weightPercentage` | DOUBLE | Portfolio weight (%) |
+| `marketValue` | DOUBLE | Dollar value in ETF |
+| `sharesNumber` | DOUBLE | Number of shares held |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B11. `bronze_etf_sectors`
+
+**Source volume:** `raw_fmapi/etf_data/{TICKER}/*_etf_sectors.json`  
+**Built by:** `ingest_data/06_etf_data.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `etf_symbol` | STRING | Parent ETF ticker |
+| `symbol` | STRING | ETF ticker (repeated for join convenience) |
+| `sector` | STRING | Sector name |
+| `weightPercentage` | DOUBLE | Allocation (%) |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B12. `bronze_analyst_estimates`
+
+**Source volume:** `raw_fmapi/analyst_data/{TICKER}/*_analyst_estimates.json`  
+**Built by:** `ingest_data/07_analyst_data.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Daily
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `date` | DATE | Estimate as-of date |
+| `revenueAvg` / `revenueLow` / `revenueHigh` | DOUBLE | Consensus revenue forecast + range |
+| `ebitdaAvg` / `ebitdaLow` / `ebitdaHigh` | DOUBLE | Forward EBITDA — covenant headroom projection |
+| `ebitAvg` / `ebitLow` / `ebitHigh` | DOUBLE | Forward EBIT range |
+| `netIncomeAvg` / `netIncomeLow` / `netIncomeHigh` | DOUBLE | Forward net income range |
+| `epsAvg` / `epsLow` / `epsHigh` | DOUBLE | Consensus EPS + range |
+| `numAnalystsRevenue` | LONG | Number of revenue estimates |
+| `numAnalystsEps` | LONG | Number of EPS estimates |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B13. `bronze_price_targets`
+
+**Source volume:** `raw_fmapi/analyst_data/{TICKER}/*_price_targets.json`  
+**Built by:** `ingest_data/07_analyst_data.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Daily
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `targetConsensus` | DOUBLE | Mean analyst price target |
+| `targetMedian` | DOUBLE | Median target |
+| `targetHigh` | DOUBLE | Bull case target |
+| `targetLow` | DOUBLE | Bear case target |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B14. `bronze_analyst_ratings`
+
+**Source volume:** `raw_fmapi/analyst_data/{TICKER}/*_analyst_ratings.json`  
+**Built by:** `ingest_data/07_analyst_data.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Daily
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `strongBuy` / `buy` / `hold` / `sell` / `strongSell` | LONG | Analyst counts per rating bucket |
+| `consensus` | STRING | Overall label (e.g., "Buy", "Hold") |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B15. `bronze_stock_news`
+
+**Source volume:** `raw_fmapi/stock_news/{TICKER}/*.json`  
+**Built by:** `ingest_data/08_news.py`  
+**Ingestion pattern:** Autoloader (append-only — new files added incrementally, checkpoint at `raw_fmapi/_checkpoints/bronze_stock_news`)  
+**Refresh cadence:** Daily
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `url` | STRING | Article hyperlink |
+| `publishedDate` | STRING | Publication timestamp |
+| `title` | STRING | Headline |
+| `summary` | STRING | Article snippet (~100–200 words) |
+| `full_text` | STRING | Full scraped article body |
+| `site` | STRING | Publication name |
+| `sentiment` | STRING | Sentiment label |
+| `publisher` | STRING | Publisher name |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B16. `bronze_indexes_and_vix`
+
+**Source volume:** `raw_fmapi/indexes/{SYMBOL_CLEAN}/*.json`  
+**Built by:** `ingest_data/09_indexes_and_vix.py`  
+**Ingestion pattern:** Overwrite  
+**Refresh cadence:** Daily
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Index symbol (e.g., "^GSPC", "^VIX") |
+| `index` | STRING | Index name label |
+| `date` | DATE | Trading date |
+| `open` | DOUBLE | Open |
+| `high` | DOUBLE | Intraday high |
+| `low` | DOUBLE | Intraday low |
+| `close` | DOUBLE | Close |
+| `volume` | LONG | Session volume |
+| `change` | DOUBLE | Absolute point change |
+| `changePercent` | DOUBLE | Daily % change |
+| `vwap` | DOUBLE | Volume-weighted average price |
+| `ingested_at` | STRING | Fetch timestamp |
+
+---
+
+### B17. `bronze_transcripts`
+
+**Source volume:** `raw_fmapi/transcripts/{TICKER}/Q{q}_{year}.json`  
+**Built by:** `ingest_data/10_transcripts.py`  
+**Ingestion pattern:** Autoloader (append-only — new quarters added incrementally, checkpoint at `raw_fmapi/_checkpoints/bronze_transcripts`)  
+**Refresh cadence:** Monthly
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `year` | INT | Fiscal year |
+| `quarter` | INT | Quarter (1–4) |
+| `date` | STRING | Earnings call date |
+| `title` | STRING | Call title/description |
+| `content` | STRING | Full transcript text (often 10,000+ words) |
+
+---
+
+### B18. `bronze_financial_reports`
+
+**Source volume:** `raw_fmapi/financial_reports/{TICKER}/{year}_{period}.json`  
+**Built by:** `ingest_data/11_financial_reports.py`  
+**Ingestion pattern:** Autoloader (append-only — new reports added incrementally, checkpoint at `raw_fmapi/_checkpoints/bronze_financial_reports`; schema inferred because section keys are dynamic)  
+**Refresh cadence:** Monthly
+
+Schema is flexible (inferred by Autoloader with `mergeSchema=true`) because FMP financial report JSON files use dynamic section names as keys (e.g., "Cover Page", "CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS"). Core fields include `symbol`, `year`, `period`, plus nested financial statement and ratio arrays. Full schema available via `DESCRIBE TABLE {catalog}.{schema}.bronze_financial_reports`.
+
+---
+
+### SEC Processing Tables
+
+These tables are produced by a separate SEC parsing pipeline that processes the raw HTML filing documents from `raw_fmapi/sec_filings/` into structured, queryable chunks for LLM retrieval.
+
+#### `sec_filing_chunks`
+
+Parsed and chunked SEC filing text. Each row is one chunk of a filing section.
+
+| Column | Type | Description |
+|---|---|---|
+| `chunk_id` | STRING | Unique chunk identifier (UUID) |
+| `symbol` | STRING | Ticker |
+| `form_type` | STRING | "10-K", "10-Q", "8-K", etc. |
+| `filing_date` | STRING | Date filed with SEC |
+| `accession` | STRING | EDGAR accession number |
+| `section_name` | STRING | Section heading (e.g., "Risk Factors", "MD&A") |
+| `chunk_index` | INT | Sequential position within the section |
+| `chunk_text` | STRING | Chunk text content |
+| `char_count` | INT | Character count of chunk |
+| `parsed_at` | TIMESTAMP | Parse timestamp |
+
+#### `sec_filing_index` (FOREIGN — Vector Search Index)
+
+Mosaic AI Vector Search index over `sec_filing_chunks`. Table type is FOREIGN, managed by the Vector Search service. Contains all columns from `sec_filing_chunks` plus:
+
+| Column | Type | Description |
+|---|---|---|
+| `__db_chunk_text_vector` | ARRAY<FLOAT> | Embedding vector for `chunk_text` |
+
+Used for semantic similarity search: given a query like "covenant breach" or "non-accrual designation", returns the most relevant filing chunks across all tickers and form types.
+
+#### `_sec_chunks_staging`
+
+Temporary staging table used during the SEC parsing pipeline to accumulate chunks before upsert into `sec_filing_chunks`. Shares the same schema as `sec_filing_chunks`.
+
+#### `sec_parsed_log`
+
+Tracks which filings have been parsed to avoid re-processing.
+
+| Column | Type | Description |
+|---|---|---|
+| `symbol` | STRING | Ticker |
+| `form_type` | STRING | Filing type |
+| `accession` | STRING | EDGAR accession number |
+| `filename` | STRING | Source .htm filename |
+| `sections_found` | STRING | Comma-separated list of sections extracted |
+| `chunks_written` | INT | Number of chunks written |
+| `parsed_at` | TIMESTAMP | Parse timestamp |
+
+---
+
+### Ingestion Log Tables
+
+Four Delta tables track incremental download state for sources where re-fetching is expensive. Described fully in the Raw Data sections above; listed here for completeness.
+
+| Table | Tracks | Natural Key |
+|---|---|---|
+| `sec_filings_log` | HTML filing downloads from EDGAR | `symbol + accession` |
+| `stock_news_log` | News article fetch status (including errors for retry) | `symbol + url` |
+| `transcripts_log` | Earnings call transcript downloads | `symbol + year + quarter` |
+| `financial_reports_log` | Structured financial report JSON downloads | `symbol + fiscal_year + period` |
+
+---
+
+### Silver & Gold Layers (Planned)
+
+No Silver or Gold tables exist yet. Planned transformations include:
+
+- **Silver** — Cleansed, normalized, and type-corrected views of bronze tables. Joining `bronze_company_profiles` with `bronze_key_metrics` to produce a `silver_holdings_enriched` view; normalizing `bronze_transcripts` content for LLM chunking; standardizing date formats across all financial statement tables.
+- **Gold** — Cross-source aggregations for agent consumption. `gold_covenant_scorecard` joining key metrics, analyst estimates, and BDC XBRL signals; `gold_client_exposure` joining synthetic holdings with enriched asset data; `gold_advisor_workspace` as the unified view powering the Genie workspace and dashboard KPIs.
 
 ---
 
