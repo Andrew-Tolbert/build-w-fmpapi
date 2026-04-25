@@ -66,6 +66,10 @@ txn_positions["txn_cost_basis_per_share"] = (
     txn_positions["txn_gross"] / txn_positions["txn_quantity"]
 )
 
+# CASH has a BUY transaction (initial deposit) but is excluded from the position comparison —
+# it's rebuilt separately from account_aum at the end.
+txn_positions = txn_positions[txn_positions["ticker"] != "CASH"]
+
 print(f"Distinct positions in transactions: {len(txn_positions):,}")
 
 # COMMAND ----------
