@@ -25,6 +25,7 @@
 spark.sql(f"""
     CREATE OR REPLACE TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_indexes_and_vix (
         symbol        STRING,
+        index         STRING,
         date          DATE,
         open          DOUBLE,
         high          DOUBLE,
@@ -41,10 +42,24 @@ spark.sql(f"""
 
 # COMMAND ----------
 
+from pyspark.sql.functions import regexp_replace, when, col
+
 wildcard_path   = f"{UC_VOLUME_PATH}/indexes/*/*_history.json"
 target_schema   = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_indexes_and_vix").schema
 
 df = spark.read.option("multiline", "true").schema(target_schema).json(wildcard_path)
+
+# Remove ^ from symbol and add Index column
+df = df.withColumn(
+    "symbol", regexp_replace(col("symbol"), r"^\^", "")
+).withColumn(
+    "index",
+    when(col("symbol") == "DJI", "Dow Jones Industrial Average")
+    .when(col("symbol") == "IXIC", "Nasdaq Composite")
+    .when(col("symbol") == "GSPC", "S&P 500")
+    .when(col("symbol") == "VIX", "VIX")
+    .otherwise(None)
+)
 
 df.write.mode("overwrite").saveAsTable(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_indexes_and_vix")
 
