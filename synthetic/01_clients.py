@@ -143,3 +143,7 @@ print(clients_df.groupby("risk_profile")["client_id"].count().reset_index(name="
 sdf = spark.createDataFrame(clients_df).withColumn("ingested_at", current_timestamp())
 sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("clients"))
 print(f"Written {sdf.count()} rows to {uc_table('clients')}")
+
+# COMMAND ----------
+
+spark.table(uc_table("clients")).display()

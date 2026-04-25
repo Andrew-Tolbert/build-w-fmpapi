@@ -111,3 +111,7 @@ print(ips_df.groupby("risk_profile")["target_allocation_pct"].sum().reset_index(
 sdf = spark.createDataFrame(ips_df).withColumn("ingested_at", current_timestamp())
 sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("ips_targets"))
 print(f"Written {sdf.count()} rows to {uc_table('ips_targets')}")
+
+# COMMAND ----------
+
+spark.table(uc_table("ips_targets")).orderBy("risk_profile", "asset_class").display()

@@ -301,3 +301,7 @@ print(f"  Accounts with IPS drift: {drift_accounts} / {len(accounts_df)} ({drift
 sdf = spark.createDataFrame(holdings_df).withColumn("ingested_at", current_timestamp())
 sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("holdings"))
 print(f"Written {sdf.count()} rows to {uc_table('holdings')}")
+
+# COMMAND ----------
+
+spark.table(uc_table("holdings")).orderBy("account_id", "asset_class", "ticker").display()

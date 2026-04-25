@@ -281,3 +281,7 @@ else:
 sdf = spark.createDataFrame(txns_df).withColumn("ingested_at", current_timestamp())
 sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("transactions"))
 print(f"Written {sdf.count()} rows to {uc_table('transactions')}")
+
+# COMMAND ----------
+
+spark.table(uc_table("transactions")).orderBy("account_id", "date", "ticker").display()

@@ -113,3 +113,7 @@ print(accounts_df.groupby("account_type")["account_id"].count().reset_index(name
 sdf = spark.createDataFrame(accounts_df).withColumn("ingested_at", current_timestamp())
 sdf.write.format("delta").mode("overwrite").option("mergeSchema", "true").saveAsTable(uc_table("accounts"))
 print(f"Written {sdf.count()} rows to {uc_table('accounts')}")
+
+# COMMAND ----------
+
+spark.table(uc_table("accounts")).display()
