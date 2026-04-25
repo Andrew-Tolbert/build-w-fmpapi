@@ -77,18 +77,7 @@ def get_price_on(ticker, target_date):
 
 # COMMAND ----------
 
-# ── Synthetic alt-fund price lookup (fixed NAV) ────────────────────────────────
-ALT_FUND_NAVS = {
-    "GS_VINTAGE_IX":  1000.0,
-    "GS_GROWTH_EQ3":  2500.0,
-    "GS_INFRA_II":    1500.0,
-    "GS_REAL_ASST4":  1200.0,
-    "GS_MACRO_OPP":    500.0,
-}
-
 def get_price(ticker, date):
-    if ticker in ALT_FUND_NAVS:
-        return ALT_FUND_NAVS[ticker]
     p = get_price_on(ticker, date)
     return p if p else None
 
@@ -162,18 +151,11 @@ for _, account in accounts_df.iterrows():
 
         n_tranches = int(rng.integers(3, 6))
 
-        # Split quantity across tranches using Dirichlet weights.
-        # Alt fund quantities are fractional LP units — keep as float and skip int rounding.
-        is_fractional = ticker in ALT_FUND_NAVS
+        # Split quantity across tranches; absorb integer rounding into the first tranche.
         raw_weights = rng.dirichlet(np.full(n_tranches, 2.0))
-        if is_fractional:
-            qtys = raw_weights * total_qty
-            qtys = np.round(qtys, 2)
-            qtys[-1] = round(total_qty - qtys[:-1].sum(), 2)  # absorb rounding into last
-        else:
-            qtys = (raw_weights * total_qty).round().astype(int)
-            diff = int(total_qty) - qtys.sum()
-            qtys[0] += diff  # absorb rounding into first tranche
+        qtys = (raw_weights * total_qty).round().astype(int)
+        diff = int(total_qty) - qtys.sum()
+        qtys[0] += diff
 
         for i, qty in enumerate(qtys):
             if qty <= 0:

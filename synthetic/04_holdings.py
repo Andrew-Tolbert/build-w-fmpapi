@@ -2,6 +2,7 @@
 # Generate synthetic holdings as of the most recent price date in bronze_historical_prices.
 # Ticker universe and metadata come from bronze_company_profiles.
 # Current prices and cost basis come from bronze_historical_prices (adjClose).
+# Alternatives exposure uses real-asset ETFs (GLD, SLV, DBC, VNQ) — all have daily prices.
 # BDC exposure is capped at 4% of account AUM regardless of IPS target.
 # IPS drift calibrated so ~10% of accounts show at least one asset class outside min/max.
 # Target: {catalog}.{schema}.holdings
@@ -42,18 +43,6 @@ fi_etf_univ      = [s for s in all_etfs if s in FIXED_INCOME_ETFS]
 alt_etf_univ     = [s for s in all_etfs if s in ALT_ETFS]
 
 print(f"Equities: {len(equity_universe)} | ETFs: {len(broad_etf_univ)} broad, {len(fi_etf_univ)} fixed income, {len(alt_etf_univ)} alts | BDCs: {len(bdc_universe)}")
-
-# COMMAND ----------
-
-# Synthetic PE/hedge fund stubs — used in Alternative Investment Vehicle accounts (UHNW only)
-# Price represents NAV per unit; quantity is number of LP units held.
-ALT_FUNDS = [
-    {"ticker": "GS_VINTAGE_IX",  "asset_class": "Alternatives", "price": 1000.0},
-    {"ticker": "GS_GROWTH_EQ3",  "asset_class": "Alternatives", "price": 2500.0},
-    {"ticker": "GS_INFRA_II",    "asset_class": "Alternatives", "price": 1500.0},
-    {"ticker": "GS_REAL_ASST4",  "asset_class": "Alternatives", "price": 1200.0},
-    {"ticker": "GS_MACRO_OPP",   "asset_class": "Alternatives", "price":  500.0},
-]
 
 # COMMAND ----------
 
@@ -190,42 +179,12 @@ for _, account in accounts_df.iterrows():
         sample = list(rng.choice(fi_etf_univ, size=min(n, len(fi_etf_univ)), replace=False))
         rows += make_positions(sample, "Fixed Income", fi_budget, inception_date, account_id)
 
-    # ── Alternatives ───────────────────────────────────────────────────────────
+    # ── Alternatives (real-asset ETFs only — GLD, SLV, DBC, VNQ) ─────────────
     alt_budget = buckets.get("Alternatives", 0)
     if alt_budget > 0:
-        use_pe = (tier == "UHNW" and account_type == "Alternative Investment Vehicle")
-        etf_share = 0.5 if use_pe else 1.0
-
-        # Real-asset ETFs portion
-        etf_alt_budget = alt_budget * etf_share
         n = int(rng.integers(2, len(alt_etf_univ) + 1))
         sample = list(rng.choice(alt_etf_univ, size=min(n, len(alt_etf_univ)), replace=False))
-        rows += make_positions(sample, "Alternatives", etf_alt_budget, inception_date, account_id)
-
-        # Synthetic PE/hedge fund units for qualifying accounts
-        if use_pe:
-            pe_budget = alt_budget * 0.5
-            n_pe = int(rng.integers(1, 4))
-            pe_selection = list(rng.choice(len(ALT_FUNDS), size=min(n_pe, len(ALT_FUNDS)), replace=False))
-            pe_funds = [ALT_FUNDS[i] for i in pe_selection]
-            pe_weights = rng.dirichlet(np.full(len(pe_funds), 2.0))
-            for fund, w in zip(pe_funds, pe_weights):
-                price = fund["price"]
-                dollar_amt = pe_budget * w
-                qty = max(1.0, round(dollar_amt / price, 2))
-                # PE funds appreciate: cost basis is 70–95% of current NAV
-                cb = price * float(rng.uniform(0.70, 0.95))
-                rows.append({
-                    "account_id":           account_id,
-                    "ticker":               fund["ticker"],
-                    "asset_class":          "Alternatives",
-                    "quantity":             qty,
-                    "price":                price,
-                    "market_value":         qty * price,
-                    "cost_basis_per_share": cb,
-                    "total_cost_basis":     qty * cb,
-                    "unrealized_gl":        qty * (price - cb),
-                })
+        rows += make_positions(sample, "Alternatives", alt_budget, inception_date, account_id)
 
     # ── Private Credit / BDC ───────────────────────────────────────────────────
     # Only for BDC-eligible clients; hard cap at 4% of account AUM.
