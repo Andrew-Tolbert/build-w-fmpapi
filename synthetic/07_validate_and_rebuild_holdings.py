@@ -222,4 +222,8 @@ print(f"\nHoldings overwritten: {sdf.count():,} rows, priced as of {max_price_da
 
 # COMMAND ----------
 
-spark.table(uc_table("holdings")).orderBy("account_id", "asset_class", "ticker").display()
+display(spark.table(uc_table("holdings")).orderBy("account_id", "asset_class", "ticker"))
+
+# COMMAND ----------
+
+

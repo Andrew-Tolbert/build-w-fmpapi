@@ -1,4 +1,11 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
+# ]
+# ///
 # Generate synthetic transaction history consistent with the holdings table.
 # Each holding is established via 3–5 initial BUY tranches spread over the first 90 days
 # after account inception. Quarterly DIVIDEND entries are added for equity/ETF/BDC positions.
@@ -286,4 +293,4 @@ print(f"Written {sdf.count()} rows to {uc_table('transactions')}")
 
 # COMMAND ----------
 
-spark.table(uc_table("transactions")).orderBy("account_id", "date", "ticker").display()
+display(spark.table(uc_table("transactions")).orderBy("account_id", "date", "ticker"))
