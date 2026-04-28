@@ -41,6 +41,7 @@
 
 dbutils.widgets.text("start_date", "2025-04-01")
 dbutils.widgets.text("end_date",   "2026-04-22")
+dbutils.widgets.text("benchmark",  "GSPC")
 
 # COMMAND ----------
 
@@ -125,6 +126,25 @@ dbutils.widgets.text("end_date",   "2026-04-22")
 # MAGIC   WHERE ticker != 'CASH'
 # MAGIC ),
 # MAGIC
+# MAGIC -- ── Benchmark return for the period ─────────────────────────────────────────
+# MAGIC -- Uses MAX(CASE...) to find the nearest close on or before each boundary date,
+# MAGIC -- keeping alignment with price_dates even if the index has sparse trading days.
+# MAGIC -- benchmark_return is a raw decimal (e.g. 0.0823); format as % on the front end.
+# MAGIC -- Alpha at any grain = SUM(contribution_to_*_return) - benchmark_return
+# MAGIC benchmark AS (
+# MAGIC   SELECT
+# MAGIC     '${benchmark}'                                                          AS benchmark_symbol,
+# MAGIC     MAX(CASE WHEN v.date <= pd.start_price_dt THEN v.close END)            AS benchmark_start,
+# MAGIC     MAX(CASE WHEN v.date <= pd.end_price_dt   THEN v.close END)            AS benchmark_end,
+# MAGIC     (MAX(CASE WHEN v.date <= pd.end_price_dt   THEN v.close END)
+# MAGIC      - MAX(CASE WHEN v.date <= pd.start_price_dt THEN v.close END))
+# MAGIC     / NULLIF(MAX(CASE WHEN v.date <= pd.start_price_dt THEN v.close END), 0)
+# MAGIC                                                                             AS benchmark_return
+# MAGIC   FROM bronze_indexes_and_vix v
+# MAGIC   CROSS JOIN price_dates pd
+# MAGIC   WHERE v.symbol = '${benchmark}'
+# MAGIC ),
+# MAGIC
 # MAGIC -- ── Equity holding rows ──────────────────────────────────────────────────────
 # MAGIC equity_rows AS (
 # MAGIC   SELECT
@@ -182,6 +202,8 @@ dbutils.widgets.text("end_date",   "2026-04-22")
 # MAGIC   -- Period context
 # MAGIC   (SELECT start_price_dt FROM price_dates) AS period_start_price_date,
 # MAGIC   (SELECT end_price_dt   FROM price_dates) AS as_of_date,
+# MAGIC   bm.benchmark_symbol,
+# MAGIC   ROUND(bm.benchmark_return, 6)            AS benchmark_return,
 # MAGIC
 # MAGIC   -- Client / account
 # MAGIC   c.client_id,
@@ -238,6 +260,7 @@ dbutils.widgets.text("end_date",   "2026-04-22")
 # MAGIC   ) AS contribution_to_aum_return
 # MAGIC
 # MAGIC FROM all_holdings ah
-# MAGIC JOIN accounts a ON ah.account_id = a.account_id
-# MAGIC JOIN clients  c ON a.client_id   = c.client_id
+# MAGIC JOIN accounts a      ON ah.account_id = a.account_id
+# MAGIC JOIN clients  c      ON a.client_id   = c.client_id
+# MAGIC CROSS JOIN benchmark bm
 # MAGIC ORDER BY c.client_name, ah.account_id, ah.asset_class, ah.ticker
