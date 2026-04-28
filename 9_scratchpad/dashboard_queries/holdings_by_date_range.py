@@ -126,6 +126,17 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC   WHERE ticker != 'CASH'
 # MAGIC ),
 # MAGIC
+# MAGIC -- ── Positions that existed before the period start ──────────────────────────
+# MAGIC -- Used to distinguish: pre-existing → period cost basis = start_price
+# MAGIC --                      new (opened mid-period) → period cost basis = actual avg cost paid
+# MAGIC pre_existing_positions AS (
+# MAGIC   SELECT DISTINCT account_id, ticker
+# MAGIC   FROM transactions
+# MAGIC   WHERE action IN ('BUY', 'DRIP')
+# MAGIC     AND ticker != 'CASH'
+# MAGIC     AND date < (SELECT start_dt FROM params)
+# MAGIC ),
+# MAGIC
 # MAGIC -- ── Benchmark return for the period ─────────────────────────────────────────
 # MAGIC -- Uses MAX(CASE...) to find the nearest close on or before each boundary date,
 # MAGIC -- keeping alignment with price_dates even if the index has sparse trading days.
@@ -163,12 +174,18 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC     spr.start_price,
 # MAGIC     ROUND(
 # MAGIC       (epr.end_price - spr.start_price)
-# MAGIC       / NULLIF(spr.start_price, 0) * 100, 2)                         AS period_return_pct
+# MAGIC       / NULLIF(spr.start_price, 0) * 100, 2)                         AS period_return_pct,
+# MAGIC     CASE
+# MAGIC       WHEN pp.account_id IS NOT NULL THEN spr.start_price
+# MAGIC       ELSE ep.total_cost / NULLIF(ep.quantity, 0)
+# MAGIC     END                                                                AS period_cost_basis_per_share
 # MAGIC   FROM equity_positions ep
 # MAGIC   JOIN end_prices    epr ON ep.ticker = epr.symbol
 # MAGIC   LEFT JOIN start_prices spr ON ep.ticker = spr.symbol
 # MAGIC   LEFT JOIN asset_class_ref ac
 # MAGIC     ON ep.account_id = ac.account_id AND ep.ticker = ac.ticker
+# MAGIC   LEFT JOIN pre_existing_positions pp
+# MAGIC     ON ep.account_id = pp.account_id AND ep.ticker = pp.ticker
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Cash holding rows ────────────────────────────────────────────────────────
@@ -185,7 +202,8 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC     0.0          AS unrealized_gl,
 # MAGIC     0.0          AS unrealized_gl_pct,
 # MAGIC     1.0          AS start_price,
-# MAGIC     0.0          AS period_return_pct
+# MAGIC     0.0          AS period_return_pct,
+# MAGIC     1.0          AS period_cost_basis_per_share
 # MAGIC   FROM cash_positions
 # MAGIC   WHERE cash_balance > 0
 # MAGIC ),
@@ -227,8 +245,10 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC   ROUND(ah.unrealized_gl,        2) AS unrealized_gl,
 # MAGIC   ah.unrealized_gl_pct,
 # MAGIC   -- Period metrics — these change when start_date changes
-# MAGIC   ROUND(ah.quantity * ah.start_price,                   2) AS market_value_at_period_start,
-# MAGIC   ROUND(ah.market_value - ah.quantity * ah.start_price, 2) AS period_pl,
+# MAGIC   ROUND(ah.quantity * ah.start_price,                              2) AS market_value_at_period_start,
+# MAGIC   ROUND(ah.period_cost_basis_per_share,                            4) AS period_cost_basis_per_share,
+# MAGIC   ROUND(ah.quantity * ah.period_cost_basis_per_share,              2) AS period_total_cost_basis,
+# MAGIC   ROUND(ah.market_value - ah.quantity * ah.period_cost_basis_per_share, 2) AS period_pl,
 # MAGIC   ah.period_return_pct,
 # MAGIC
 # MAGIC   -- Portfolio weights (window functions — no GROUP BY needed)
