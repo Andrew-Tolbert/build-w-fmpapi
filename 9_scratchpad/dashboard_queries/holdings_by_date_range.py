@@ -133,13 +133,13 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC -- Alpha at any grain = SUM(contribution_to_*_return) - benchmark_return
 # MAGIC benchmark AS (
 # MAGIC   SELECT
-# MAGIC     '${benchmark}'                                                          AS benchmark_symbol,
-# MAGIC     MAX(CASE WHEN v.date <= pd.start_price_dt THEN v.close END)            AS benchmark_start,
-# MAGIC     MAX(CASE WHEN v.date <= pd.end_price_dt   THEN v.close END)            AS benchmark_end,
-# MAGIC     (MAX(CASE WHEN v.date <= pd.end_price_dt   THEN v.close END)
-# MAGIC      - MAX(CASE WHEN v.date <= pd.start_price_dt THEN v.close END))
-# MAGIC     / NULLIF(MAX(CASE WHEN v.date <= pd.start_price_dt THEN v.close END), 0)
-# MAGIC                                                                             AS benchmark_return
+# MAGIC     '${benchmark}'                                                                       AS benchmark_symbol,
+# MAGIC     MAX_BY(v.close, CASE WHEN v.date <= pd.start_price_dt THEN v.date END)             AS benchmark_start,
+# MAGIC     MAX_BY(v.close, CASE WHEN v.date <= pd.end_price_dt   THEN v.date END)             AS benchmark_end,
+# MAGIC     (MAX_BY(v.close, CASE WHEN v.date <= pd.end_price_dt   THEN v.date END)
+# MAGIC      - MAX_BY(v.close, CASE WHEN v.date <= pd.start_price_dt THEN v.date END))
+# MAGIC     / NULLIF(MAX_BY(v.close, CASE WHEN v.date <= pd.start_price_dt THEN v.date END), 0)
+# MAGIC                                                                                          AS benchmark_return
 # MAGIC   FROM bronze_indexes_and_vix v
 # MAGIC   CROSS JOIN price_dates pd
 # MAGIC   WHERE v.symbol = '${benchmark}'
