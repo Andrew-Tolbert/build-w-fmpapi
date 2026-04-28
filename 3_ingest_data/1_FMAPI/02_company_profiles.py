@@ -68,7 +68,11 @@ spark.sql(f"""
 
 wildcard_path = f"{UC_VOLUME_PATH}/company_profiles/*/*.json"
 
-df = spark.read.option("multiline", "true").json(wildcard_path)
+table = 'bronze_company_profiles'
+
+target_schema = spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.{table}").schema
+
+df = spark.read.option("multiline", "true").schema(target_schema).json(wildcard_path)
 
 df.write.mode("overwrite").saveAsTable(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles")
 
