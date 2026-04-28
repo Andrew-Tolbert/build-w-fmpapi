@@ -71,7 +71,7 @@ resources:
         - task_key: fmapi_02_historical_prices
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/02_historical_prices"
+            notebook_path: "2_pull_data/1_FMAPI/02_historical_prices"
             base_parameters:
               <<: *base_params
 
@@ -80,7 +80,7 @@ resources:
             - task_key: fmapi_02_historical_prices
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/07_analyst_data"
+            notebook_path: "2_pull_data/1_FMAPI/07_analyst_data"
             base_parameters:
               <<: *base_params
 
@@ -89,7 +89,7 @@ resources:
             - task_key: fmapi_07_analyst_data
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/09_indexes_and_vix"
+            notebook_path: "2_pull_data/1_FMAPI/09_indexes_and_vix"
             base_parameters:
               <<: *base_params
 
@@ -98,7 +98,7 @@ resources:
             - task_key: fmapi_09_indexes_and_vix
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/08_news"
+            notebook_path: "2_pull_data/1_FMAPI/08_news"
             base_parameters:
               <<: *base_params
 
@@ -108,7 +108,7 @@ resources:
             - task_key: fmapi_02_historical_prices
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/01_historical_prices"
+            notebook_path: "3_ingest_data/1_FMAPI/01_historical_prices"
             base_parameters:
               <<: *base_params
 
@@ -117,7 +117,7 @@ resources:
             - task_key: fmapi_07_analyst_data
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/07_analyst_data"
+            notebook_path: "3_ingest_data/1_FMAPI/07_analyst_data"
             base_parameters:
               <<: *base_params
 
@@ -126,7 +126,7 @@ resources:
             - task_key: fmapi_09_indexes_and_vix
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/09_indexes_and_vix"
+            notebook_path: "3_ingest_data/1_FMAPI/09_indexes_and_vix"
             base_parameters:
               <<: *base_params
 
@@ -135,7 +135,7 @@ resources:
             - task_key: fmapi_08_news
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/08_news"
+            notebook_path: "3_ingest_data/1_FMAPI/08_news"
             base_parameters:
               <<: *base_params
 
@@ -165,7 +165,7 @@ resources:
         - task_key: fmapi_01_company_profiles
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/01_company_profiles"
+            notebook_path: "2_pull_data/1_FMAPI/01_company_profiles"
             base_parameters:
               <<: *base_params
 
@@ -174,7 +174,7 @@ resources:
             - task_key: fmapi_01_company_profiles
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/03_financials"
+            notebook_path: "2_pull_data/1_FMAPI/03_financials"
             base_parameters:
               <<: *base_params
 
@@ -183,7 +183,7 @@ resources:
             - task_key: fmapi_03_financials
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/04_key_metrics"
+            notebook_path: "2_pull_data/1_FMAPI/04_key_metrics"
             base_parameters:
               <<: *base_params
 
@@ -192,7 +192,7 @@ resources:
             - task_key: fmapi_04_key_metrics
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/06_etf_data"
+            notebook_path: "2_pull_data/1_FMAPI/06_etf_data"
             base_parameters:
               <<: *base_params
 
@@ -202,7 +202,7 @@ resources:
             - task_key: fmapi_06_etf_data
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/05_sec_filings"
+            notebook_path: "2_pull_data/1_FMAPI/05_sec_filings"
             base_parameters:
               <<: *base_params
 
@@ -211,7 +211,7 @@ resources:
             - task_key: fmapi_06_etf_data
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/10_transcripts"
+            notebook_path: "2_pull_data/1_FMAPI/10_transcripts"
             base_parameters:
               <<: *base_params
 
@@ -220,7 +220,7 @@ resources:
             - task_key: fmapi_06_etf_data
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/1_FMAPI/11_financial_reports"
+            notebook_path: "2_pull_data/1_FMAPI/11_financial_reports"
             base_parameters:
               <<: *base_params
 
@@ -228,7 +228,7 @@ resources:
         - task_key: factset_01_filings
           <<: *serverless_env
           notebook_task:
-            notebook_path: "pull_data/2_FACTSET/01_factset_filings"
+            notebook_path: "2_pull_data/2_FACTSET/01_factset_filings"
             base_parameters:
               <<: *base_params
 
@@ -238,7 +238,7 @@ resources:
             - task_key: fmapi_01_company_profiles
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/02_company_profiles"
+            notebook_path: "3_ingest_data/1_FMAPI/02_company_profiles"
             base_parameters:
               <<: *base_params
 
@@ -247,7 +247,7 @@ resources:
             - task_key: fmapi_03_financials
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/03_financials"
+            notebook_path: "3_ingest_data/1_FMAPI/03_financials"
             base_parameters:
               <<: *base_params
 
@@ -256,7 +256,7 @@ resources:
             - task_key: fmapi_04_key_metrics
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/04_key_metrics"
+            notebook_path: "3_ingest_data/1_FMAPI/04_key_metrics"
             base_parameters:
               <<: *base_params
 
@@ -265,7 +265,7 @@ resources:
             - task_key: fmapi_06_etf_data
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/06_etf_data"
+            notebook_path: "3_ingest_data/1_FMAPI/06_etf_data"
             base_parameters:
               <<: *base_params
 
@@ -274,7 +274,7 @@ resources:
             - task_key: fmapi_05_sec_filings
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/12_sec_parsing"
+            notebook_path: "3_ingest_data/1_FMAPI/12_sec_parsing"
             base_parameters:
               <<: *base_params
 
@@ -283,7 +283,7 @@ resources:
             - task_key: ingest_fmapi_12_sec_parsing
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/13_sec_validation"
+            notebook_path: "3_ingest_data/1_FMAPI/13_sec_validation"
             base_parameters:
               <<: *base_params
 
@@ -292,7 +292,7 @@ resources:
             - task_key: fmapi_10_transcripts
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/10_transcripts"
+            notebook_path: "3_ingest_data/1_FMAPI/10_transcripts"
             base_parameters:
               <<: *base_params
 
@@ -301,13 +301,13 @@ resources:
             - task_key: fmapi_11_financial_reports
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/1_FMAPI/11_financial_reports"
+            notebook_path: "3_ingest_data/1_FMAPI/11_financial_reports"
             base_parameters:
               <<: *base_params
 
         - task_key: ingest_edgar_bdc_early_warning
           <<: *serverless_env
           notebook_task:
-            notebook_path: "ingest_data/3_EDGAR/bdc_early_warning_sql"
+            notebook_path: "3_ingest_data/3_EDGAR/bdc_early_warning_sql"
             base_parameters:
               <<: *base_params
