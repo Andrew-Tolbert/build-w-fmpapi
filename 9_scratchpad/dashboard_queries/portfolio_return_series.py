@@ -38,6 +38,8 @@
 
 # COMMAND ----------
 
+
+
 # COMMAND ----------
 
 # MAGIC %sql
@@ -87,9 +89,9 @@
 # MAGIC   WHERE t.action IN ('BUY', 'DRIP')
 # MAGIC     AND t.ticker != 'CASH'
 # MAGIC     AND t.date   <= (SELECT end_dt FROM params)
-# MAGIC     AND (:advisor_id   = '' OR c.advisor_id   = :advisor_id)
-# MAGIC     AND (:account_type = '' OR a.account_type = :account_type)
-# MAGIC     AND (:ticker       = '' OR t.ticker       = :ticker)
+# MAGIC     AND (array_contains(:advisor_id, c.advisor_id) OR :advisor_id IS NULL)
+# MAGIC     AND (array_contains(:account_type, a.account_type) OR :account_type IS NULL)
+# MAGIC     AND (array_contains(:ticker, t.ticker) OR :ticker IS NULL)
 # MAGIC   GROUP BY t.account_id, t.ticker
 # MAGIC ),
 # MAGIC
@@ -122,7 +124,7 @@
 # MAGIC     MAX_BY(v.close, v.date) AS benchmark_value
 # MAGIC   FROM trading_days td
 # MAGIC   LEFT JOIN bronze_indexes_and_vix v
-# MAGIC     ON v.symbol = :benchmark AND v.date = td.date
+# MAGIC     ON v.index = :benchmark AND v.date = td.date
 # MAGIC   GROUP BY td.date
 # MAGIC ),
 # MAGIC
@@ -138,7 +140,7 @@
 # MAGIC   dp.date,
 # MAGIC   ROUND(dp.portfolio_value / NULLIF(pb.base, 0) - 1, 6) AS portfolio_return,
 # MAGIC   ROUND(db.benchmark_value / NULLIF(bb.base, 0) - 1, 6) AS benchmark_return,
-# MAGIC   :benchmark                                             AS benchmark_symbol
+# MAGIC   :benchmark                                             AS benchmark
 # MAGIC FROM daily_portfolio dp
 # MAGIC LEFT JOIN daily_benchmark  db ON dp.date = db.date
 # MAGIC CROSS JOIN portfolio_baseline pb
