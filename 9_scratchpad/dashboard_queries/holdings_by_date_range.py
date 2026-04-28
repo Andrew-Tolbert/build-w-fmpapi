@@ -1,4 +1,11 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
+# ]
+# ///
 # Dynamic Holdings Query — Dashboard Use
 #
 # Returns holdings as of the end_date, reconstructed live from the transactions ledger
@@ -27,6 +34,12 @@
 # COMMAND ----------
 
 # MAGIC %sql
+# MAGIC use catalog ahtsa; 
+# MAGIC use schema awm; 
+
+# COMMAND ----------
+
+# MAGIC %sql
 # MAGIC
 # MAGIC -- Test defaults — override via Lakeview date-range widget
 # MAGIC -- In a Lakeview dashboard replace the literal dates with {{ start_date }} / {{ end_date }}
@@ -36,8 +49,8 @@
 # MAGIC -- ── Parameters ──────────────────────────────────────────────────────────────
 # MAGIC params AS (
 # MAGIC   SELECT
-# MAGIC     DATE('2025-01-01') AS start_dt,   -- {{ start_date }}
-# MAGIC     DATE('2025-12-31') AS end_dt       -- {{ end_date }}
+# MAGIC     DATE('2025-04-01') AS start_dt,   -- {{ start_date }}
+# MAGIC     DATE('2026-04-22') AS end_dt       -- {{ end_date }}
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Nearest available trading day on or before each bound ────────────────────
@@ -46,7 +59,7 @@
 # MAGIC   SELECT
 # MAGIC     MAX(CASE WHEN date <= (SELECT end_dt   FROM params) THEN date END) AS end_price_dt,
 # MAGIC     MAX(CASE WHEN date <= (SELECT start_dt FROM params) THEN date END) AS start_price_dt
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM bronze_historical_prices
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Equity positions as of end_date ─────────────────────────────────────────
@@ -57,7 +70,7 @@
 # MAGIC     ticker,
 # MAGIC     SUM(quantity)     AS quantity,
 # MAGIC     SUM(gross_amount) AS total_cost
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.transactions
+# MAGIC   FROM transactions
 # MAGIC   WHERE action IN ('BUY', 'DRIP')
 # MAGIC     AND ticker != 'CASH'
 # MAGIC     AND date <= (SELECT end_dt FROM params)
@@ -75,7 +88,7 @@
 # MAGIC     + SUM(CASE WHEN action = 'DRIP'                          THEN net_amount ELSE 0.0 END)
 # MAGIC     + SUM(CASE WHEN action = 'FEE'                           THEN net_amount ELSE 0.0 END)
 # MAGIC     ) AS cash_balance
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.transactions
+# MAGIC   FROM transactions
 # MAGIC   WHERE date <= (SELECT end_dt FROM params)
 # MAGIC   GROUP BY account_id
 # MAGIC ),
@@ -83,14 +96,14 @@
 # MAGIC -- ── End-of-period prices ─────────────────────────────────────────────────────
 # MAGIC end_prices AS (
 # MAGIC   SELECT symbol, adjClose AS end_price
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM bronze_historical_prices
 # MAGIC   WHERE date = (SELECT end_price_dt FROM price_dates)
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Start-of-period prices (for period return pct) ───────────────────────────
 # MAGIC start_prices AS (
 # MAGIC   SELECT symbol, adjClose AS start_price
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM bronze_historical_prices
 # MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
 # MAGIC ),
 # MAGIC
@@ -98,7 +111,7 @@
 # MAGIC -- Asset class is not in transactions; carry it from the holdings snapshot.
 # MAGIC asset_class_ref AS (
 # MAGIC   SELECT DISTINCT account_id, ticker, asset_class
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.holdings
+# MAGIC   FROM holdings
 # MAGIC   WHERE ticker != 'CASH'
 # MAGIC ),
 # MAGIC
@@ -163,6 +176,7 @@
 # MAGIC   -- Client / account
 # MAGIC   c.client_id,
 # MAGIC   c.client_name,
+# MAGIC   c.advisor_id,
 # MAGIC   c.tier,
 # MAGIC   c.risk_profile,
 # MAGIC   ah.account_id,
@@ -196,6 +210,6 @@
 # MAGIC   ) AS pct_of_total_aum
 # MAGIC
 # MAGIC FROM all_holdings ah
-# MAGIC JOIN ${uc_catalog}.${uc_schema}.accounts a ON ah.account_id = a.account_id
-# MAGIC JOIN ${uc_catalog}.${uc_schema}.clients  c ON a.client_id   = c.client_id
+# MAGIC JOIN accounts a ON ah.account_id = a.account_id
+# MAGIC JOIN clients  c ON a.client_id   = c.client_id
 # MAGIC ORDER BY c.client_name, ah.account_id, ah.asset_class, ah.ticker

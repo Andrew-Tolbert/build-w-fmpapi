@@ -1,7 +1,14 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# dependencies = [
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
+# ]
+# ///
 # Portfolio Performance Queries — Ask 5
 #
-# Three SQL-only queries using ${uc_catalog}.${uc_schema} widget params:
+# Three SQL-only queries using ahtsa.awm widget params:
 #   1. Overall AUM return since 2025
 #   2. YTD portfolio return vs S&P 500
 #   3. Individual client daily return vs S&P 500 since inception
@@ -16,6 +23,12 @@
 
 # COMMAND ----------
 
+# MAGIC %sql
+# MAGIC use catalog ahtsa; 
+# MAGIC use schema awm; 
+
+# COMMAND ----------
+
 # MAGIC %md ## Query 1 — Overall AUM Performance Since 2025
 
 # COMMAND ----------
@@ -25,17 +38,17 @@
 # MAGIC WITH
 # MAGIC start_date AS (
 # MAGIC   SELECT MIN(date) AS d
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM ahtsa.awm.bronze_historical_prices
 # MAGIC   WHERE date >= '2025-01-01'
 # MAGIC ),
 # MAGIC end_date AS (
 # MAGIC   SELECT MAX(date) AS d
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM ahtsa.awm.bronze_historical_prices
 # MAGIC ),
 # MAGIC -- Aggregate positions across all accounts (non-cash)
 # MAGIC current_positions AS (
 # MAGIC   SELECT ticker, SUM(quantity) AS total_qty
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.holdings
+# MAGIC   FROM ahtsa.awm.holdings
 # MAGIC   WHERE ticker != 'CASH'
 # MAGIC   GROUP BY ticker
 # MAGIC ),
@@ -43,7 +56,7 @@
 # MAGIC value_at_start AS (
 # MAGIC   SELECT SUM(cp.total_qty * hp.adjClose) AS aum_start
 # MAGIC   FROM current_positions cp
-# MAGIC   JOIN ${uc_catalog}.${uc_schema}.bronze_historical_prices hp
+# MAGIC   JOIN ahtsa.awm.bronze_historical_prices hp
 # MAGIC     ON cp.ticker = hp.symbol
 # MAGIC     AND hp.date = (SELECT d FROM start_date)
 # MAGIC ),
@@ -51,7 +64,7 @@
 # MAGIC value_at_end AS (
 # MAGIC   SELECT SUM(cp.total_qty * hp.adjClose) AS aum_end
 # MAGIC   FROM current_positions cp
-# MAGIC   JOIN ${uc_catalog}.${uc_schema}.bronze_historical_prices hp
+# MAGIC   JOIN ahtsa.awm.bronze_historical_prices hp
 # MAGIC     ON cp.ticker = hp.symbol
 # MAGIC     AND hp.date = (SELECT d FROM end_date)
 # MAGIC )
@@ -76,43 +89,43 @@
 # MAGIC WITH
 # MAGIC ytd_start AS (
 # MAGIC   SELECT MIN(date) AS d
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM ahtsa.awm.bronze_historical_prices
 # MAGIC   WHERE date >= '2025-01-01'
 # MAGIC ),
 # MAGIC ytd_end AS (
 # MAGIC   SELECT MAX(date) AS d
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices
+# MAGIC   FROM ahtsa.awm.bronze_historical_prices
 # MAGIC ),
 # MAGIC current_positions AS (
 # MAGIC   SELECT ticker, SUM(quantity) AS total_qty
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.holdings
+# MAGIC   FROM ahtsa.awm.holdings
 # MAGIC   WHERE ticker != 'CASH'
 # MAGIC   GROUP BY ticker
 # MAGIC ),
 # MAGIC portfolio_ytd_start AS (
 # MAGIC   SELECT SUM(cp.total_qty * hp.adjClose) AS value
 # MAGIC   FROM current_positions cp
-# MAGIC   JOIN ${uc_catalog}.${uc_schema}.bronze_historical_prices hp
+# MAGIC   JOIN ahtsa.awm.bronze_historical_prices hp
 # MAGIC     ON cp.ticker = hp.symbol
 # MAGIC     AND hp.date = (SELECT d FROM ytd_start)
 # MAGIC ),
 # MAGIC portfolio_ytd_end AS (
 # MAGIC   SELECT SUM(cp.total_qty * hp.adjClose) AS value
 # MAGIC   FROM current_positions cp
-# MAGIC   JOIN ${uc_catalog}.${uc_schema}.bronze_historical_prices hp
+# MAGIC   JOIN ahtsa.awm.bronze_historical_prices hp
 # MAGIC     ON cp.ticker = hp.symbol
 # MAGIC     AND hp.date = (SELECT d FROM ytd_end)
 # MAGIC ),
 # MAGIC sp500_ytd_start AS (
 # MAGIC   SELECT close AS value
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_indexes_and_vix
-# MAGIC   WHERE symbol = '^GSPC'
+# MAGIC   FROM ahtsa.awm.bronze_indexes_and_vix
+# MAGIC   WHERE symbol = 'GSPC'
 # MAGIC     AND date = (SELECT d FROM ytd_start)
 # MAGIC ),
 # MAGIC sp500_ytd_end AS (
 # MAGIC   SELECT close AS value
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_indexes_and_vix
-# MAGIC   WHERE symbol = '^GSPC'
+# MAGIC   FROM ahtsa.awm.bronze_indexes_and_vix
+# MAGIC   WHERE symbol = 'GSPC'
 # MAGIC     AND date = (SELECT d FROM ytd_end)
 # MAGIC )
 # MAGIC SELECT
@@ -142,7 +155,7 @@
 # MAGIC -- Pick one client — largest UHNW by AUM
 # MAGIC sample_client AS (
 # MAGIC   SELECT client_id, client_name, inception_date
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.clients
+# MAGIC   FROM ahtsa.awm.clients
 # MAGIC   WHERE tier = 'UHNW'
 # MAGIC   ORDER BY total_aum DESC
 # MAGIC   LIMIT 1
@@ -150,13 +163,13 @@
 # MAGIC -- All accounts belonging to this client
 # MAGIC client_accounts AS (
 # MAGIC   SELECT a.account_id
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.accounts a
+# MAGIC   FROM ahtsa.awm.accounts a
 # MAGIC   JOIN sample_client c ON a.client_id = c.client_id
 # MAGIC ),
 # MAGIC -- Aggregate non-cash positions across all client accounts
 # MAGIC client_positions AS (
 # MAGIC   SELECT h.ticker, SUM(h.quantity) AS total_qty
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.holdings h
+# MAGIC   FROM ahtsa.awm.holdings h
 # MAGIC   JOIN client_accounts ca ON h.account_id = ca.account_id
 # MAGIC   WHERE h.ticker != 'CASH'
 # MAGIC   GROUP BY h.ticker
@@ -166,7 +179,7 @@
 # MAGIC   SELECT
 # MAGIC     hp.date,
 # MAGIC     SUM(cp.total_qty * hp.adjClose) AS portfolio_value
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_historical_prices hp
+# MAGIC   FROM ahtsa.awm.bronze_historical_prices hp
 # MAGIC   JOIN client_positions cp  ON hp.symbol = cp.ticker
 # MAGIC   JOIN sample_client sc     ON hp.date >= sc.inception_date
 # MAGIC   GROUP BY hp.date
@@ -180,9 +193,9 @@
 # MAGIC -- S&P 500 daily series from client inception onward
 # MAGIC daily_sp500 AS (
 # MAGIC   SELECT sp.date, sp.close AS sp500_close
-# MAGIC   FROM ${uc_catalog}.${uc_schema}.bronze_indexes_and_vix sp
+# MAGIC   FROM ahtsa.awm.bronze_indexes_and_vix sp
 # MAGIC   JOIN sample_client sc ON sp.date >= sc.inception_date
-# MAGIC   WHERE sp.symbol = '^GSPC'
+# MAGIC   WHERE sp.symbol = 'GSPC'
 # MAGIC ),
 # MAGIC -- S&P 500 value on that same inception date
 # MAGIC sp500_inception AS (
@@ -205,3 +218,26 @@
 # MAGIC CROSS JOIN sp500_inception si
 # MAGIC CROSS JOIN sample_client sc
 # MAGIC ORDER BY dp.date
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   c.client_id,
+# MAGIC   c.client_name,
+# MAGIC   c.tier,
+# MAGIC   c.risk_profile,
+# MAGIC   c.total_aum,
+# MAGIC   c.advisor_id,
+# MAGIC   c.bdc_eligible,
+# MAGIC   c.tone_profile,
+# MAGIC   c.contact_pref,
+# MAGIC   c.inception_date,
+# MAGIC   COUNT(DISTINCT a.account_id) as num_accounts,
+# MAGIC   SUM(a.account_aum) as total_account_aum
+# MAGIC FROM
+# MAGIC   clients c
+# MAGIC     LEFT JOIN accounts a
+# MAGIC       ON c.client_id = a.client_id
+# MAGIC GROUP BY
+# MAGIC ALL
