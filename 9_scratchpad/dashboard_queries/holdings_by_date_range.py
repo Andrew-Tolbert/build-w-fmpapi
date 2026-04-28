@@ -51,17 +51,20 @@ dbutils.widgets.text("benchmark",  "GSPC")
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
+# DBTITLE 1,FINAL QUERY
 # MAGIC %sql
-# MAGIC -- Notebook: dates come from widgets above.
-# MAGIC -- Lakeview: replace DATE('${start_date}') / DATE('${end_date}') with DATE('{{ start_date }}') / DATE('{{ end_date }}')
-# MAGIC
 # MAGIC WITH
 # MAGIC
 # MAGIC -- ── Parameters ──────────────────────────────────────────────────────────────
 # MAGIC params AS (
 # MAGIC   SELECT
-# MAGIC     DATE('${start_date}') AS start_dt,
-# MAGIC     DATE('${end_date}')   AS end_dt
+# MAGIC      :date.min AS start_dt,  
+# MAGIC      :date.max AS end_dt      
+# MAGIC
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Nearest available trading day on or before each bound ────────────────────
@@ -144,7 +147,7 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC -- Alpha at any grain = SUM(contribution_to_*_return) - benchmark_return
 # MAGIC benchmark AS (
 # MAGIC   SELECT
-# MAGIC     '${benchmark}'                                                                       AS benchmark_symbol,
+# MAGIC     :benchmark                                                        AS benchmark_symbol,
 # MAGIC     MAX_BY(v.close, CASE WHEN v.date <= pd.start_price_dt THEN v.date END)             AS benchmark_start,
 # MAGIC     MAX_BY(v.close, CASE WHEN v.date <= pd.end_price_dt   THEN v.date END)             AS benchmark_end,
 # MAGIC     (MAX_BY(v.close, CASE WHEN v.date <= pd.end_price_dt   THEN v.date END)
@@ -153,7 +156,7 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC                                                                                          AS benchmark_return
 # MAGIC   FROM bronze_indexes_and_vix v
 # MAGIC   CROSS JOIN price_dates pd
-# MAGIC   WHERE v.symbol = '${benchmark}'
+# MAGIC   WHERE v.symbol = :benchmark
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Equity holding rows ──────────────────────────────────────────────────────
@@ -302,3 +305,28 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC JOIN clients  c      ON a.client_id   = c.client_id
 # MAGIC CROSS JOIN benchmark bm
 # MAGIC ORDER BY c.client_name, ah.account_id, ah.asset_class, ah.ticker
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC WITH 
+# MAGIC params AS (
+# MAGIC   SELECT
+# MAGIC     DATE('2026-02-27') AS start_dt,
+# MAGIC     DATE('2026-03-31')   AS end_dt
+# MAGIC ),
+# MAGIC
+# MAGIC price_dates AS (
+# MAGIC   SELECT
+# MAGIC     MAX(CASE WHEN date <= (SELECT end_dt   FROM params) THEN date END) AS end_price_dt,
+# MAGIC     MAX(CASE WHEN date <= (SELECT start_dt FROM params) THEN date END) AS start_price_dt
+# MAGIC   FROM bronze_historical_prices
+# MAGIC )
+# MAGIC
+# MAGIC SELECT
+# MAGIC    *
+# MAGIC FROM bronze_indexes_and_vix v
+# MAGIC   CROSS JOIN price_dates pd
+# MAGIC   WHERE v.symbol = 'DJI'
+# MAGIC   AND date >= start_price_dt
+# MAGIC   AND date <= end_price_dt
