@@ -15,8 +15,7 @@
 #   :date.min   — period start (date range widget)
 #   :date.max   — period end   (date range widget)
 #   :benchmark  — index symbol from bronze_indexes_and_vix (e.g. GSPC, DJI, IXIC)
-#   :client_id    — optional; leave blank to include all clients
-#   :account_id   — optional; leave blank to include all accounts
+#   :advisor_id   — optional; leave blank to include all advisors
 #   :account_type — optional; leave blank to include all account types
 #   :ticker       — optional; leave blank to include all tickers
 #
@@ -88,8 +87,7 @@
 # MAGIC   WHERE t.action IN ('BUY', 'DRIP')
 # MAGIC     AND t.ticker != 'CASH'
 # MAGIC     AND t.date   <= (SELECT end_dt FROM params)
-# MAGIC     AND (:client_id    = '' OR c.client_id    = :client_id)
-# MAGIC     AND (:account_id   = '' OR t.account_id   = :account_id)
+# MAGIC     AND (:advisor_id   = '' OR c.advisor_id   = :advisor_id)
 # MAGIC     AND (:account_type = '' OR a.account_type = :account_type)
 # MAGIC     AND (:ticker       = '' OR t.ticker       = :ticker)
 # MAGIC   GROUP BY t.account_id, t.ticker
