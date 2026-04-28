@@ -24,13 +24,16 @@
 #
 # Output grain: one row per trading day in [start_date, end_date]
 # Output columns:
-#   date                — trading day
-#   portfolio_return    — decimal (e.g. 0.0412 = +4.12%); baseline 0 at start_date
-#   benchmark_return    — same scale for the chosen index
-#   benchmark_symbol    — label for the front end
+#   date                          — trading day
+#   portfolio_return_before_fees  — decimal; pure price return, no fee drag
+#   portfolio_return_after_fees   — decimal; net of cumulative mgmt fees since start_date
+#   cumulative_fees               — dollar fees paid from start_date through each day
+#   benchmark_return              — same scale for the chosen index
+#   benchmark                     — label for the front end
 #
 # Positions are held fixed as of end_date (buy-and-hold perspective).
-# Cash is excluded — return reflects equity/ETF/BDC performance only.
+# Cash is excluded from price return; fees are subtracted from the portfolio value
+# in the after-fees series so the drag accumulates correctly through the period.
 
 # COMMAND ----------
 
@@ -133,16 +136,36 @@
 # MAGIC   SELECT benchmark_value AS base
 # MAGIC   FROM daily_benchmark
 # MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Cumulative fees paid since period start ───────────────────────────────────
+# MAGIC -- Applies the same advisor / account_type filters as filtered_positions so the
+# MAGIC -- fee drag matches the portfolio slice being measured.
+# MAGIC -- Fees accumulate as a step function — flat between quarters, then jump on fee dates.
+# MAGIC fees_by_day AS (
+# MAGIC   SELECT
+# MAGIC     td.date,
+# MAGIC     COALESCE(SUM(ABS(f.net_amount)), 0) AS cumulative_fees
+# MAGIC   FROM trading_days td
+# MAGIC   LEFT JOIN transactions f
+# MAGIC     ON f.action = 'FEE'
+# MAGIC     AND f.date >= (SELECT start_price_dt FROM price_dates)
+# MAGIC     AND f.date <= td.date
+# MAGIC     AND f.account_id IN (SELECT DISTINCT account_id FROM filtered_positions)
+# MAGIC   GROUP BY td.date
 # MAGIC )
 # MAGIC
 # MAGIC -- ── Final output ─────────────────────────────────────────────────────────────
 # MAGIC SELECT
 # MAGIC   dp.date,
-# MAGIC   ROUND(dp.portfolio_value / NULLIF(pb.base, 0) - 1, 6) AS portfolio_return,
-# MAGIC   ROUND(db.benchmark_value / NULLIF(bb.base, 0) - 1, 6) AS benchmark_return,
-# MAGIC   :benchmark                                             AS benchmark
+# MAGIC   ROUND(dp.portfolio_value / NULLIF(pb.base, 0) - 1, 6)                          AS portfolio_return_before_fees,
+# MAGIC   ROUND((dp.portfolio_value - fd.cumulative_fees) / NULLIF(pb.base, 0) - 1, 6)   AS portfolio_return_after_fees,
+# MAGIC   ROUND(fd.cumulative_fees, 2)                                                    AS cumulative_fees,
+# MAGIC   ROUND(db.benchmark_value / NULLIF(bb.base, 0) - 1, 6)                          AS benchmark_return,
+# MAGIC   :benchmark                                                                      AS benchmark
 # MAGIC FROM daily_portfolio dp
 # MAGIC LEFT JOIN daily_benchmark  db ON dp.date = db.date
+# MAGIC LEFT JOIN fees_by_day      fd ON dp.date = fd.date
 # MAGIC CROSS JOIN portfolio_baseline pb
 # MAGIC CROSS JOIN benchmark_baseline bb
 # MAGIC ORDER BY dp.date

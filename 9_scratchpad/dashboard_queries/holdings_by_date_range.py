@@ -153,6 +153,21 @@
 # MAGIC   WHERE v.symbol = :benchmark
 # MAGIC ),
 # MAGIC
+# MAGIC -- ── Management fees paid in the period ──────────────────────────────────────
+# MAGIC -- One row per account; LEFT JOIN onto every holding row so the front end can
+# MAGIC -- sum fees at any grain using MAX(fees_paid_in_period) per account (not SUM,
+# MAGIC -- to avoid multiplying by the number of positions).
+# MAGIC fees_in_period AS (
+# MAGIC   SELECT
+# MAGIC     account_id,
+# MAGIC     ABS(SUM(net_amount)) AS fees_paid
+# MAGIC   FROM transactions
+# MAGIC   WHERE action = 'FEE'
+# MAGIC     AND date >= (SELECT start_dt FROM params)
+# MAGIC     AND date <= (SELECT end_dt   FROM params)
+# MAGIC   GROUP BY account_id
+# MAGIC ),
+# MAGIC
 # MAGIC -- ── Equity holding rows ──────────────────────────────────────────────────────
 # MAGIC equity_rows AS (
 # MAGIC   SELECT
@@ -292,12 +307,16 @@
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price * (1 + bm.benchmark_return))
 # MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0), 8
-# MAGIC   ) AS aum_alpha_contribution
+# MAGIC   ) AS aum_alpha_contribution,
+# MAGIC
+# MAGIC   -- Fees paid in period — use MAX() when aggregating to avoid double-counting across positions
+# MAGIC   ROUND(COALESCE(f.fees_paid, 0.0), 2) AS fees_paid_in_period
 # MAGIC
 # MAGIC FROM all_holdings ah
 # MAGIC JOIN accounts a      ON ah.account_id = a.account_id
 # MAGIC JOIN clients  c      ON a.client_id   = c.client_id
 # MAGIC CROSS JOIN benchmark bm
+# MAGIC LEFT JOIN fees_in_period f ON ah.account_id = f.account_id
 # MAGIC ORDER BY c.client_name, ah.account_id, ah.asset_class, ah.ticker
 
 # COMMAND ----------
