@@ -226,15 +226,15 @@ dbutils.widgets.text("end_date",   "2026-04-22")
 # MAGIC   -- e.g. SUM(contribution_to_account_return) WHERE account_id = X  →  account period return
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price)
-# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY ah.account_id), 0) * 100, 4
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY ah.account_id), 0), 6
 # MAGIC   ) AS contribution_to_account_return,
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price)
-# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY c.client_id), 0) * 100, 4
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY c.client_id), 0), 6
 # MAGIC   ) AS contribution_to_client_return,
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price)
-# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0) * 100, 6
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0), 8
 # MAGIC   ) AS contribution_to_aum_return
 # MAGIC
 # MAGIC FROM all_holdings ah
