@@ -12,8 +12,8 @@
 # and priced against bronze_historical_prices. The holdings table is a static snapshot;
 # this query is the authoritative, date-aware version for the front end.
 #
-# Parameters (Lakeview dashboard widgets):
-#   start_date  — period start for return calculation (e.g. 2025-01-01)
+# Parameters (Databricks widgets — set below; Lakeview uses {{ start_date }} / {{ end_date }}):
+#   start_date  — period start; drives period_pl and period_return_pct
 #   end_date    — positions and valuations are computed as of this date
 #
 # Position logic (mirrors 07_validate_and_rebuild_holdings.py):
@@ -24,8 +24,14 @@
 # Pricing:
 #   end_price   = adjClose on the nearest trading day on or before end_date
 #   start_price = adjClose on the nearest trading day on or before start_date
-#     (used only for period_return_pct — the price appreciation of each position
-#      over the selected window, independent of cost basis)
+#
+# Period metrics (the columns that change when start_date changes):
+#   market_value_at_period_start = quantity × start_price  (what this position was worth then)
+#   period_pl                    = market_value - market_value_at_period_start  ($ gain/loss)
+#   period_return_pct            = (end_price - start_price) / start_price × 100
+#
+# Inception metrics (independent of start_date):
+#   unrealized_gl / unrealized_gl_pct  — gain/loss since original cost basis
 
 # COMMAND ----------
 
@@ -33,24 +39,28 @@
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC use catalog ahtsa; 
-# MAGIC use schema awm; 
+dbutils.widgets.text("start_date", "2025-04-01")
+dbutils.widgets.text("end_date",   "2026-04-22")
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC
-# MAGIC -- Test defaults — override via Lakeview date-range widget
-# MAGIC -- In a Lakeview dashboard replace the literal dates with {{ start_date }} / {{ end_date }}
+# MAGIC use catalog ahtsa;
+# MAGIC use schema awm;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC -- Notebook: dates come from widgets above.
+# MAGIC -- Lakeview: replace DATE('${start_date}') / DATE('${end_date}') with DATE('{{ start_date }}') / DATE('{{ end_date }}')
 # MAGIC
 # MAGIC WITH
 # MAGIC
 # MAGIC -- ── Parameters ──────────────────────────────────────────────────────────────
 # MAGIC params AS (
 # MAGIC   SELECT
-# MAGIC     DATE('2025-04-01') AS start_dt,   -- {{ start_date }}
-# MAGIC     DATE('2026-04-22') AS end_dt       -- {{ end_date }}
+# MAGIC     DATE('${start_date}') AS start_dt,
+# MAGIC     DATE('${end_date}')   AS end_dt
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Nearest available trading day on or before each bound ────────────────────
@@ -193,6 +203,9 @@
 # MAGIC   ROUND(ah.total_cost_basis,     2) AS total_cost_basis,
 # MAGIC   ROUND(ah.unrealized_gl,        2) AS unrealized_gl,
 # MAGIC   ah.unrealized_gl_pct,
+# MAGIC   -- Period metrics — these change when start_date changes
+# MAGIC   ROUND(ah.quantity * ah.start_price,                   2) AS market_value_at_period_start,
+# MAGIC   ROUND(ah.market_value - ah.quantity * ah.start_price, 2) AS period_pl,
 # MAGIC   ah.period_return_pct,
 # MAGIC
 # MAGIC   -- Portfolio weights (window functions — no GROUP BY needed)
