@@ -79,13 +79,13 @@
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Filtered positions as of end_date ────────────────────────────────────────
-# MAGIC -- Holds quantity fixed (buy-and-hold). Optional filters narrow to a client,
-# MAGIC -- account, or ticker; empty string means include all.
+# MAGIC -- Carries total_cost so the baseline can use actual cost for new positions.
 # MAGIC filtered_positions AS (
 # MAGIC   SELECT
 # MAGIC     t.account_id,
 # MAGIC     t.ticker,
-# MAGIC     SUM(t.quantity) AS quantity
+# MAGIC     SUM(t.quantity)     AS quantity,
+# MAGIC     SUM(t.gross_amount) AS total_cost
 # MAGIC   FROM transactions t
 # MAGIC   JOIN accounts a ON t.account_id = a.account_id
 # MAGIC   JOIN clients  c ON a.client_id  = c.client_id
@@ -96,6 +96,27 @@
 # MAGIC     AND (array_contains(:account_type, a.account_type) OR :account_type IS NULL)
 # MAGIC     AND (array_contains(:ticker, t.ticker) OR :ticker IS NULL)
 # MAGIC   GROUP BY t.account_id, t.ticker
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Positions that existed before the period start ──────────────────────────
+# MAGIC -- Mirrors the same logic in holdings_by_date_range so baselines are consistent.
+# MAGIC pre_existing_positions AS (
+# MAGIC   SELECT DISTINCT t.account_id, t.ticker
+# MAGIC   FROM transactions t
+# MAGIC   JOIN accounts a ON t.account_id = a.account_id
+# MAGIC   JOIN clients  c ON a.client_id  = c.client_id
+# MAGIC   WHERE t.action IN ('BUY', 'DRIP')
+# MAGIC     AND t.ticker != 'CASH'
+# MAGIC     AND t.date   <  (SELECT start_dt FROM params)
+# MAGIC     AND (array_contains(:advisor_id, c.advisor_id) OR :advisor_id IS NULL)
+# MAGIC     AND (array_contains(:account_type, a.account_type) OR :account_type IS NULL)
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Start-of-period prices ────────────────────────────────────────────────────
+# MAGIC series_start_prices AS (
+# MAGIC   SELECT symbol, adjClose AS start_price
+# MAGIC   FROM bronze_historical_prices
+# MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Daily portfolio value ─────────────────────────────────────────────────────
@@ -111,11 +132,21 @@
 # MAGIC   GROUP BY td.date
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Portfolio value at period start (baseline = 0%) ───────────────────────────
+# MAGIC -- ── Portfolio baseline using period_cost_basis ────────────────────────────────
+# MAGIC -- Pre-existing positions: quantity × start_price  (same as holdings query)
+# MAGIC -- New positions:          actual total_cost paid   (same as holdings query)
+# MAGIC -- This makes the series reconcile with SUM(period_pl)/SUM(period_total_cost_basis).
 # MAGIC portfolio_baseline AS (
-# MAGIC   SELECT portfolio_value AS base
-# MAGIC   FROM daily_portfolio
-# MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
+# MAGIC   SELECT SUM(
+# MAGIC     CASE WHEN pp.account_id IS NOT NULL
+# MAGIC          THEN fp.quantity * sp.start_price
+# MAGIC          ELSE fp.total_cost
+# MAGIC     END
+# MAGIC   ) AS base
+# MAGIC   FROM filtered_positions fp
+# MAGIC   LEFT JOIN series_start_prices       sp ON fp.ticker     = sp.symbol
+# MAGIC   LEFT JOIN pre_existing_positions    pp ON fp.account_id = pp.account_id
+# MAGIC                                         AND fp.ticker     = pp.ticker
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Daily benchmark series ────────────────────────────────────────────────────
