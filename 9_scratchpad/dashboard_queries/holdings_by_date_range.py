@@ -39,12 +39,6 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("start_date", "2025-04-01")
-dbutils.widgets.text("end_date",   "2026-04-22")
-dbutils.widgets.text("benchmark",  "GSPC")
-
-# COMMAND ----------
-
 # MAGIC %sql
 # MAGIC use catalog ahtsa;
 # MAGIC use schema awm;
