@@ -220,7 +220,22 @@ dbutils.widgets.text("end_date",   "2026-04-22")
 # MAGIC   ROUND(
 # MAGIC     ah.market_value
 # MAGIC     / NULLIF(SUM(ah.market_value) OVER (), 0) * 100, 4
-# MAGIC   ) AS pct_of_total_aum
+# MAGIC   ) AS pct_of_total_aum,
+# MAGIC
+# MAGIC   -- Return contributions — SUM at any grain on the front end to get total return %
+# MAGIC   -- e.g. SUM(contribution_to_account_return) WHERE account_id = X  →  account period return
+# MAGIC   ROUND(
+# MAGIC     (ah.market_value - ah.quantity * ah.start_price)
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY ah.account_id), 0) * 100, 4
+# MAGIC   ) AS contribution_to_account_return,
+# MAGIC   ROUND(
+# MAGIC     (ah.market_value - ah.quantity * ah.start_price)
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY c.client_id), 0) * 100, 4
+# MAGIC   ) AS contribution_to_client_return,
+# MAGIC   ROUND(
+# MAGIC     (ah.market_value - ah.quantity * ah.start_price)
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0) * 100, 6
+# MAGIC   ) AS contribution_to_aum_return
 # MAGIC
 # MAGIC FROM all_holdings ah
 # MAGIC JOIN accounts a ON ah.account_id = a.account_id
