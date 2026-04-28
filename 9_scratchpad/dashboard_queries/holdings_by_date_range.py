@@ -203,7 +203,8 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC   (SELECT start_price_dt FROM price_dates) AS period_start_price_date,
 # MAGIC   (SELECT end_price_dt   FROM price_dates) AS as_of_date,
 # MAGIC   bm.benchmark_symbol,
-# MAGIC   ROUND(bm.benchmark_return, 6)            AS benchmark_return,
+# MAGIC   ROUND(bm.benchmark_return,       6) AS benchmark_return,
+# MAGIC   ROUND(bm.benchmark_return * 100, 4) AS benchmark_return_pct,
 # MAGIC
 # MAGIC   -- Client / account
 # MAGIC   c.client_id,
@@ -257,7 +258,24 @@ dbutils.widgets.text("benchmark",  "GSPC")
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price)
 # MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0), 8
-# MAGIC   ) AS contribution_to_aum_return
+# MAGIC   ) AS contribution_to_aum_return,
+# MAGIC
+# MAGIC   -- Alpha contributions — SUM at any grain to get total alpha vs benchmark
+# MAGIC   -- Formula: position return contribution minus position's benchmark drag
+# MAGIC   -- (starting weight × benchmark return), so the sum stays additive.
+# MAGIC   -- SUM(account_alpha_contribution)  →  account_total_return  - benchmark_return
+# MAGIC   ROUND(
+# MAGIC     (ah.market_value - ah.quantity * ah.start_price * (1 + bm.benchmark_return))
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY ah.account_id), 0), 6
+# MAGIC   ) AS account_alpha_contribution,
+# MAGIC   ROUND(
+# MAGIC     (ah.market_value - ah.quantity * ah.start_price * (1 + bm.benchmark_return))
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (PARTITION BY c.client_id), 0), 6
+# MAGIC   ) AS client_alpha_contribution,
+# MAGIC   ROUND(
+# MAGIC     (ah.market_value - ah.quantity * ah.start_price * (1 + bm.benchmark_return))
+# MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0), 8
+# MAGIC   ) AS aum_alpha_contribution
 # MAGIC
 # MAGIC FROM all_holdings ah
 # MAGIC JOIN accounts a      ON ah.account_id = a.account_id
