@@ -7,8 +7,11 @@
 #   3. Overwrites holdings with the transaction-derived values, priced at the latest
 #      date in bronze_historical_prices.
 #
-# Asset class is preserved from the existing holdings table — it is not derivable
-# from transactions alone.
+# Asset class assignment:
+#   - Equity / Private Credit / Fixed Income / Alternatives / Cash: carried from holdings.
+#   - ETF positions: reclassified using bronze_etf_info.assetClass — "ETF" is a vehicle,
+#     not an asset class. Mapping: Fixed Income ETFs → Fixed Income,
+#     Commodity/Real Estate/Multi-Asset ETFs → Alternatives, all others → Equity.
 # BUY and DRIP transactions contribute to position quantity and cost basis.
 # DIVIDEND and FEE transactions affect only the cash balance.
 
@@ -43,9 +46,33 @@ latest_prices  = (
     .to_dict()
 )
 
+# ETF → true asset class mapping via bronze_etf_info
+etf_asset_class_map = (
+    spark.table(uc_table("bronze_etf_info"))
+    .select("symbol", "assetClass")
+    .toPandas()
+    .set_index("symbol")["assetClass"]
+    .to_dict()
+)
+
+def resolve_asset_class(ticker, stored_asset_class):
+    """Return the true IPS asset class for a position.
+    ETF vehicles are reclassified using bronze_etf_info.assetClass.
+    All other positions return their stored asset class unchanged.
+    """
+    if stored_asset_class != "ETF":
+        return stored_asset_class
+    etf_class = etf_asset_class_map.get(ticker, "Equity")
+    if etf_class in ("Fixed Income", "Bond"):
+        return "Fixed Income"
+    if etf_class in ("Commodity", "Commodities", "Real Estate", "Multi-Asset", "Alternative"):
+        return "Alternatives"
+    return "Equity"
+
 print(f"Transactions: {len(txns_df):,} rows")
 print(f"Holdings:     {len(holdings_df):,} rows")
 print(f"Price date:   {max_price_date}")
+print(f"ETF mappings: {len(etf_asset_class_map):,} symbols")
 
 # COMMAND ----------
 
@@ -148,7 +175,8 @@ for _, pos in txn_positions.iterrows():
         print(f"WARNING: no current price for {ticker} — skipping")
         continue
 
-    asset_class = asset_class_ref.get((account_id, ticker), "Equity")
+    stored_class = asset_class_ref.get((account_id, ticker), "Equity")
+    asset_class  = resolve_asset_class(ticker, stored_class)
 
     rebuilt_rows.append({
         "date":                 max_price_date,

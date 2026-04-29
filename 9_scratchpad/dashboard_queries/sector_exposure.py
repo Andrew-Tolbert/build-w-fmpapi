@@ -90,8 +90,8 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC JOIN accounts a    ON h.account_id = a.account_id
 # MAGIC JOIN clients  c    ON a.client_id  = c.client_id
 # MAGIC JOIN bronze_company_profiles cp ON h.ticker = cp.symbol
-# MAGIC WHERE h.asset_class IN ('Equity', 'Private Credit', 'Fixed Income')
-# MAGIC   AND h.ticker != 'CASH'
+# MAGIC WHERE h.ticker != 'CASH'
+# MAGIC   AND NOT EXISTS (SELECT 1 FROM bronze_etf_info ei WHERE ei.symbol = h.ticker)
 # MAGIC
 # MAGIC UNION ALL
 # MAGIC
@@ -120,7 +120,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC JOIN clients  c ON a.client_id  = c.client_id
 # MAGIC JOIN bronze_etf_info    ei ON h.ticker = ei.symbol
 # MAGIC JOIN bronze_etf_sectors es ON h.ticker = es.etf_symbol
-# MAGIC WHERE h.asset_class = 'ETF'
 # MAGIC
 # MAGIC UNION ALL
 # MAGIC

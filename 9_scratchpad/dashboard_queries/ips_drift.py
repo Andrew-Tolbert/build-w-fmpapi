@@ -84,36 +84,17 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   GROUP BY h.account_id
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── ETF reclassification — map ETF holdings to true IPS asset class ──────────
-# MAGIC -- "ETF" is a vehicle, not an asset class. Use bronze_etf_info.assetClass to
-# MAGIC -- fold each ETF position into Equity, Fixed Income, or Alternatives.
-# MAGIC -- All non-ETF holdings pass through unchanged.
-# MAGIC etf_reclassified AS (
-# MAGIC   SELECT
-# MAGIC     h.account_id,
-# MAGIC     h.ticker,
-# MAGIC     h.market_value,
-# MAGIC     CASE
-# MAGIC       WHEN h.asset_class != 'ETF'                               THEN h.asset_class
-# MAGIC       WHEN ei.assetClass IN ('Fixed Income', 'Bond')            THEN 'Fixed Income'
-# MAGIC       WHEN ei.assetClass IN ('Commodity', 'Commodities',
-# MAGIC                              'Real Estate', 'Multi-Asset',
-# MAGIC                              'Alternative')                      THEN 'Alternatives'
-# MAGIC       ELSE 'Equity'
-# MAGIC     END AS ips_asset_class
-# MAGIC   FROM holdings h
-# MAGIC   LEFT JOIN bronze_etf_info ei ON h.ticker = ei.symbol
-# MAGIC ),
-# MAGIC
-# MAGIC -- ── Actual allocation by (account_id, reclassified asset class) ──────────
+# MAGIC -- ── Actual allocation by (account_id, asset_class) ────────────────────────
+# MAGIC -- holdings.asset_class is now the true economic class (ETFs reclassified at
+# MAGIC -- write time in 07_validate_and_rebuild_holdings.py via bronze_etf_info).
 # MAGIC actual_by_class AS (
 # MAGIC   SELECT
-# MAGIC     account_id,
-# MAGIC     ips_asset_class     AS asset_class,
-# MAGIC     SUM(market_value)   AS actual_market_value,
+# MAGIC     h.account_id,
+# MAGIC     h.asset_class,
+# MAGIC     SUM(h.market_value) AS actual_market_value,
 # MAGIC     COUNT(*)            AS positions_count
-# MAGIC   FROM etf_reclassified
-# MAGIC   GROUP BY account_id, ips_asset_class
+# MAGIC   FROM holdings h
+# MAGIC   GROUP BY h.account_id, h.asset_class
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Cross-join accounts × all IPS asset classes ────────────────────────────
@@ -258,37 +239,22 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC -- breach_count: number of (account × asset_class) cells outside min/max band.
 # MAGIC CREATE OR REPLACE TABLE gold_client_ips_drift AS
 # MAGIC WITH
-# MAGIC -- ── ETF reclassification (client level) ──────────────────────────────────
-# MAGIC client_etf_reclassified AS (
-# MAGIC   SELECT
-# MAGIC     ac.client_id,
-# MAGIC     h.market_value,
-# MAGIC     CASE
-# MAGIC       WHEN h.asset_class != 'ETF'                               THEN h.asset_class
-# MAGIC       WHEN ei.assetClass IN ('Fixed Income', 'Bond')            THEN 'Fixed Income'
-# MAGIC       WHEN ei.assetClass IN ('Commodity', 'Commodities',
-# MAGIC                              'Real Estate', 'Multi-Asset',
-# MAGIC                              'Alternative')                      THEN 'Alternatives'
-# MAGIC       ELSE 'Equity'
-# MAGIC     END AS ips_asset_class
-# MAGIC   FROM holdings h
-# MAGIC   JOIN accounts ac ON h.account_id = ac.account_id
-# MAGIC   LEFT JOIN bronze_etf_info ei ON h.ticker = ei.symbol
-# MAGIC ),
-# MAGIC
 # MAGIC -- ── Client-level actual allocation across all accounts ─────────────────────
+# MAGIC -- holdings.asset_class is the true economic class — ETFs already reclassified
+# MAGIC -- at write time via 07_validate_and_rebuild_holdings.py.
 # MAGIC client_class_actual AS (
 # MAGIC   SELECT
-# MAGIC     client_id,
-# MAGIC     ips_asset_class                                    AS asset_class,
-# MAGIC     SUM(market_value)                                  AS actual_market_value,
-# MAGIC     SUM(SUM(market_value)) OVER (PARTITION BY client_id)
+# MAGIC     ac.client_id,
+# MAGIC     h.asset_class,
+# MAGIC     SUM(h.market_value)                                AS actual_market_value,
+# MAGIC     SUM(SUM(h.market_value)) OVER (PARTITION BY ac.client_id)
 # MAGIC                                                        AS total_client_value
-# MAGIC   FROM client_etf_reclassified
-# MAGIC   GROUP BY client_id, ips_asset_class
+# MAGIC   FROM holdings h
+# MAGIC   JOIN accounts ac ON h.account_id = ac.account_id
+# MAGIC   GROUP BY ac.client_id, h.asset_class
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Ensure all 6 asset classes per client ─────────────────────────────────
+# MAGIC -- ── Ensure all 5 asset classes per client ─────────────────────────────────
 # MAGIC client_class_grid AS (
 # MAGIC   SELECT
 # MAGIC     c.client_id,
