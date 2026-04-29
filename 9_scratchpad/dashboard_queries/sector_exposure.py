@@ -16,6 +16,13 @@
 #   • ETF positions:    expand by bronze_etf_sectors.weightPercentage × market_value
 #   • Cash:             sector = 'Cash'
 #
+# All financial metrics (market_value, unrealized_gl, cost_basis) are scaled by
+# weight_in_source so they stay additive at any aggregation grain. ETF sector
+# weights sum to 1.0, so portfolio-level totals are preserved.
+#
+# Note: sector weights reflect the latest bronze_etf_sectors fetch. Historical
+# queries use current weights — acceptable for demo, not production-accurate.
+#
 # Holdings and transactions are not modified. This is a reporting-layer enrichment only.
 #
 #   SECTION A — Gold Table Creation
@@ -66,7 +73,13 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC -- An ETF holding produces N rows (one per sector in bronze_etf_sectors).
 # MAGIC -- An equity/BDC holding produces 1 row (sector from bronze_company_profiles).
 # MAGIC -- Cash produces 1 row (sector = 'Cash').
-# MAGIC -- Sum exposure_market_value to get total sector exposure at any grain.
+# MAGIC --
+# MAGIC -- All financial metrics are multiplied by weight_in_source so they remain
+# MAGIC -- additive at any grain. ETF weights sum to 1.0, so:
+# MAGIC --   SUM(exposure_market_value)  = position market value
+# MAGIC --   SUM(exposure_unrealized_gl) = position unrealized G/L
+# MAGIC --   SUM(exposure_cost_basis)    = position cost basis
+# MAGIC --   SUM(exposure_unrealized_gl) / SUM(exposure_cost_basis) = unrealized return %
 # MAGIC CREATE OR REPLACE TABLE gold_portfolio_sector_exposure AS
 # MAGIC
 # MAGIC -- ── Direct equity and BDC positions ──────────────────────────────────────────
@@ -87,8 +100,13 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   cp.companyName                                       AS constituent_name,
 # MAGIC   COALESCE(cp.sector,   'Unknown')                     AS sector,
 # MAGIC   COALESCE(cp.industry, 'Unknown')                     AS industry,
+# MAGIC   1.0                                                  AS weight_in_source,
 # MAGIC   h.market_value                                       AS exposure_market_value,
-# MAGIC   1.0                                                  AS weight_in_source
+# MAGIC   h.unrealized_gl                                      AS exposure_unrealized_gl,
+# MAGIC   h.total_cost_basis                                   AS exposure_cost_basis,
+# MAGIC   h.cost_basis_per_share,
+# MAGIC   h.quantity,
+# MAGIC   h.price                                              AS current_price
 # MAGIC FROM holdings h
 # MAGIC JOIN accounts a    ON h.account_id = a.account_id
 # MAGIC JOIN clients  c    ON a.client_id  = c.client_id
@@ -99,6 +117,8 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC UNION ALL
 # MAGIC
 # MAGIC -- ── ETF positions — expanded by sector weights ────────────────────────────────
+# MAGIC -- Financial metrics are scaled by weightPercentage/100 so they remain additive.
+# MAGIC -- Sector weights are as-of latest data fetch (see note on staleness in header).
 # MAGIC SELECT
 # MAGIC   h.account_id,
 # MAGIC   a.client_id,
@@ -108,16 +128,21 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   c.risk_profile,
 # MAGIC   a.account_name,
 # MAGIC   a.account_type,
-# MAGIC   h.ticker                                             AS source_ticker,
-# MAGIC   ei.name                                              AS source_name,
-# MAGIC   ei.assetClass                                        AS source_asset_class,
-# MAGIC   'ETF'                                                AS source_type,
-# MAGIC   es.symbol                                            AS constituent_ticker,
-# MAGIC   NULL                                                 AS constituent_name,
-# MAGIC   COALESCE(es.sector, 'Unknown')                       AS sector,
-# MAGIC   NULL                                                 AS industry,
-# MAGIC   ROUND(h.market_value * es.weightPercentage / 100, 2) AS exposure_market_value,
-# MAGIC   es.weightPercentage / 100                            AS weight_in_source
+# MAGIC   h.ticker                                                       AS source_ticker,
+# MAGIC   ei.name                                                        AS source_name,
+# MAGIC   ei.assetClass                                                  AS source_asset_class,
+# MAGIC   'ETF'                                                          AS source_type,
+# MAGIC   es.symbol                                                      AS constituent_ticker,
+# MAGIC   NULL                                                           AS constituent_name,
+# MAGIC   COALESCE(es.sector, 'Unknown')                                 AS sector,
+# MAGIC   NULL                                                           AS industry,
+# MAGIC   es.weightPercentage / 100                                      AS weight_in_source,
+# MAGIC   ROUND(h.market_value    * es.weightPercentage / 100, 2)        AS exposure_market_value,
+# MAGIC   ROUND(h.unrealized_gl   * es.weightPercentage / 100, 2)        AS exposure_unrealized_gl,
+# MAGIC   ROUND(h.total_cost_basis * es.weightPercentage / 100, 2)       AS exposure_cost_basis,
+# MAGIC   h.cost_basis_per_share,
+# MAGIC   ROUND(h.quantity        * es.weightPercentage / 100, 6)        AS quantity,
+# MAGIC   h.price                                                        AS current_price
 # MAGIC FROM holdings h
 # MAGIC JOIN accounts a ON h.account_id = a.account_id
 # MAGIC JOIN clients  c ON a.client_id  = c.client_id
@@ -144,8 +169,13 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   'Cash'                                               AS constituent_name,
 # MAGIC   'Cash'                                               AS sector,
 # MAGIC   NULL                                                 AS industry,
+# MAGIC   1.0                                                  AS weight_in_source,
 # MAGIC   h.market_value                                       AS exposure_market_value,
-# MAGIC   1.0                                                  AS weight_in_source
+# MAGIC   0.0                                                  AS exposure_unrealized_gl,
+# MAGIC   h.market_value                                       AS exposure_cost_basis,
+# MAGIC   1.0                                                  AS cost_basis_per_share,
+# MAGIC   h.quantity,
+# MAGIC   1.0                                                  AS current_price
 # MAGIC FROM holdings h
 # MAGIC JOIN accounts a ON h.account_id = a.account_id
 # MAGIC JOIN clients  c ON a.client_id  = c.client_id
@@ -176,7 +206,11 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC %sql
 # MAGIC -- One row per (account_id, source_ticker, sector).
 # MAGIC -- ETF positions are pre-expanded by sector weight in gold_portfolio_sector_exposure.
-# MAGIC -- Use exposure_market_value as the measure — group/filter by any dimension column.
+# MAGIC -- All financial metrics are pre-scaled by weight_in_source and remain additive:
+# MAGIC --   SUM(exposure_market_value)  → total market value for that sector slice
+# MAGIC --   SUM(exposure_unrealized_gl) → total unrealized G/L for that sector slice
+# MAGIC --   SUM(exposure_cost_basis)    → total cost basis for that sector slice
+# MAGIC --   SUM(exposure_unrealized_gl) / SUM(exposure_cost_basis) → unrealized return %
 # MAGIC SELECT
 # MAGIC   e.account_id,
 # MAGIC   e.account_name,
@@ -193,8 +227,12 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   e.constituent_ticker,
 # MAGIC   e.sector,
 # MAGIC   e.industry,
+# MAGIC   e.weight_in_source,
 # MAGIC   e.exposure_market_value,
-# MAGIC   e.weight_in_source
+# MAGIC   e.exposure_unrealized_gl,
+# MAGIC   e.exposure_cost_basis,
+# MAGIC   e.current_price,
+# MAGIC   e.cost_basis_per_share
 # MAGIC FROM gold_portfolio_sector_exposure e
 # MAGIC WHERE
 # MAGIC   (array_contains(:advisor_id,   e.advisor_id)   OR :advisor_id   IS NULL)
