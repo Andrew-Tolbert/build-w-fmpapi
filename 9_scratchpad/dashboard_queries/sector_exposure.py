@@ -158,45 +158,25 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # COMMAND ----------
 
-# DBTITLE 1,─── SECTION B: LAKEVIEW DASHBOARD QUERIES ─────────────────────────────────────
-# Lakeview named parameter syntax: :param_name
-# Filter pattern: (array_contains(:param, column) OR :param IS NULL)
-# All filters optional — omit or leave NULL to include all.
+# DBTITLE 1,─── SECTION B: LAKEVIEW DASHBOARD QUERY ──────────────────────────────────────────
+# Single dataset — Lakeview handles all aggregations via chart/widget config.
+# Sum exposure_market_value and group by any column (sector, source_type, client, etc.)
+# to build bar charts, counters, tables, and line charts from one dataset.
+#
+# Lakeview parameters (all optional; NULL = include all):
+#   :advisor_id   — advisor ID     (multi-select)
+#   :account_type — account type   (multi-select)
+#   :client_id    — client ID      (multi-select)
+#   :sector       — sector         (multi-select)
+#   :source_type  — 'ETF' or 'Direct'
 
 # COMMAND ----------
 
-# DBTITLE 1,[LAKEVIEW] 1 — Sector Exposure Overview (Book-Wide)
+# DBTITLE 1,[LAKEVIEW] Sector Exposure — Base Dataset
 # MAGIC %sql
-# MAGIC -- Total portfolio exposure by sector, including ETF look-through.
-# MAGIC -- source_type = 'ETF' means the exposure comes via an ETF; 'Direct' = individual stock.
-# MAGIC -- Supports: advisor_id, account_type, client_id, sector, source_type filters.
-# MAGIC SELECT
-# MAGIC   e.sector,
-# MAGIC   e.source_type,
-# MAGIC   COUNT(DISTINCT e.client_id)                          AS clients,
-# MAGIC   COUNT(DISTINCT e.account_id)                         AS accounts,
-# MAGIC   COUNT(DISTINCT e.source_ticker)                      AS source_instruments,
-# MAGIC   ROUND(SUM(e.exposure_market_value) / 1e9, 4)         AS exposure_b,
-# MAGIC   ROUND(
-# MAGIC     SUM(e.exposure_market_value)
-# MAGIC     / NULLIF(SUM(SUM(e.exposure_market_value)) OVER (), 0) * 100, 4)
-# MAGIC                                                        AS pct_of_total_exposure
-# MAGIC FROM gold_portfolio_sector_exposure e
-# MAGIC WHERE
-# MAGIC   (array_contains(:advisor_id,   e.advisor_id)   OR :advisor_id   IS NULL)
-# MAGIC   AND (array_contains(:account_type, e.account_type) OR :account_type IS NULL)
-# MAGIC   AND (array_contains(:client_id,    e.client_id)    OR :client_id    IS NULL)
-# MAGIC   AND (array_contains(:sector,       e.sector)       OR :sector       IS NULL)
-# MAGIC   AND (e.source_type = :source_type                  OR :source_type  IS NULL)
-# MAGIC GROUP BY e.sector, e.source_type
-# MAGIC ORDER BY exposure_b DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[LAKEVIEW] 2 — Sector Exposure by Account (with ETF Look-Through)
-# MAGIC %sql
-# MAGIC -- One row per (account_id, sector). Expands ETF positions into their sector weights.
-# MAGIC -- ideal for a stacked-bar chart in Lakeview: x = account, stacks = sectors.
+# MAGIC -- One row per (account_id, source_ticker, sector).
+# MAGIC -- ETF positions are pre-expanded by sector weight in gold_portfolio_sector_exposure.
+# MAGIC -- Use exposure_market_value as the measure — group/filter by any dimension column.
 # MAGIC SELECT
 # MAGIC   e.account_id,
 # MAGIC   e.account_name,
@@ -206,107 +186,22 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   e.advisor_id,
 # MAGIC   e.tier,
 # MAGIC   e.risk_profile,
+# MAGIC   e.source_ticker,
+# MAGIC   e.source_name,
+# MAGIC   e.source_asset_class,
+# MAGIC   e.source_type,
+# MAGIC   e.constituent_ticker,
 # MAGIC   e.sector,
-# MAGIC   ROUND(SUM(e.exposure_market_value), 2)               AS sector_exposure,
-# MAGIC   ROUND(
-# MAGIC     SUM(e.exposure_market_value)
-# MAGIC     / NULLIF(SUM(SUM(e.exposure_market_value)) OVER (PARTITION BY e.account_id), 0) * 100, 4)
-# MAGIC                                                        AS pct_of_account,
-# MAGIC   ROUND(SUM(CASE WHEN e.source_type = 'ETF'
-# MAGIC                  THEN e.exposure_market_value ELSE 0 END), 2)
-# MAGIC                                                        AS via_etf_mv,
-# MAGIC   ROUND(SUM(CASE WHEN e.source_type = 'Direct'
-# MAGIC                  THEN e.exposure_market_value ELSE 0 END), 2)
-# MAGIC                                                        AS via_direct_mv
+# MAGIC   e.industry,
+# MAGIC   e.exposure_market_value,
+# MAGIC   e.weight_in_source
 # MAGIC FROM gold_portfolio_sector_exposure e
 # MAGIC WHERE
 # MAGIC   (array_contains(:advisor_id,   e.advisor_id)   OR :advisor_id   IS NULL)
 # MAGIC   AND (array_contains(:account_type, e.account_type) OR :account_type IS NULL)
 # MAGIC   AND (array_contains(:client_id,    e.client_id)    OR :client_id    IS NULL)
 # MAGIC   AND (array_contains(:sector,       e.sector)       OR :sector       IS NULL)
-# MAGIC GROUP BY e.account_id, e.account_name, e.account_type, e.client_id,
-# MAGIC          e.client_name, e.advisor_id, e.tier, e.risk_profile, e.sector
-# MAGIC ORDER BY e.client_name, e.account_id, sector_exposure DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[LAKEVIEW] 3 — Sector Concentration Risk per Client
-# MAGIC %sql
-# MAGIC -- Identifies clients with the highest concentration in any single sector.
-# MAGIC -- High sector concentration (>30% of portfolio in one sector) is a risk signal.
-# MAGIC WITH
-# MAGIC client_sector AS (
-# MAGIC   SELECT
-# MAGIC     e.client_id,
-# MAGIC     e.client_name,
-# MAGIC     e.advisor_id,
-# MAGIC     e.tier,
-# MAGIC     e.risk_profile,
-# MAGIC     e.sector,
-# MAGIC     SUM(e.exposure_market_value)  AS sector_exposure,
-# MAGIC     SUM(SUM(e.exposure_market_value)) OVER (PARTITION BY e.client_id)
-# MAGIC                                   AS total_client_exposure
-# MAGIC   FROM gold_portfolio_sector_exposure e
-# MAGIC   WHERE
-# MAGIC     (array_contains(:advisor_id,   e.advisor_id)   OR :advisor_id   IS NULL)
-# MAGIC     AND (array_contains(:account_type, e.account_type) OR :account_type IS NULL)
-# MAGIC     AND (array_contains(:client_id,    e.client_id)    OR :client_id    IS NULL)
-# MAGIC   GROUP BY e.client_id, e.client_name, e.advisor_id, e.tier, e.risk_profile, e.sector
-# MAGIC )
-# MAGIC SELECT
-# MAGIC   client_id,
-# MAGIC   client_name,
-# MAGIC   advisor_id,
-# MAGIC   tier,
-# MAGIC   risk_profile,
-# MAGIC   sector,
-# MAGIC   ROUND(sector_exposure / 1e6, 3)                      AS sector_mv_m,
-# MAGIC   ROUND(total_client_exposure / 1e6, 3)                AS client_aum_m,
-# MAGIC   ROUND(sector_exposure / NULLIF(total_client_exposure, 0) * 100, 2)
-# MAGIC                                                        AS sector_pct,
-# MAGIC   CASE
-# MAGIC     WHEN sector_exposure / NULLIF(total_client_exposure, 0) > 0.35 THEN 'High'
-# MAGIC     WHEN sector_exposure / NULLIF(total_client_exposure, 0) > 0.25 THEN 'Elevated'
-# MAGIC     ELSE 'Normal'
-# MAGIC   END                                                  AS concentration_flag
-# MAGIC FROM client_sector
-# MAGIC WHERE (array_contains(:sector, sector) OR :sector IS NULL)
-# MAGIC ORDER BY sector_exposure / NULLIF(total_client_exposure, 0) DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[LAKEVIEW] 4 — Direct vs ETF Exposure by Sector
-# MAGIC %sql
-# MAGIC -- For each sector, shows how much exposure is via direct holdings vs ETF look-through.
-# MAGIC -- Useful for understanding which sectors are "passive" vs "active" bets.
-# MAGIC SELECT
-# MAGIC   e.sector,
-# MAGIC   ROUND(SUM(e.exposure_market_value) / 1e9, 4)          AS total_exposure_b,
-# MAGIC   ROUND(SUM(CASE WHEN e.source_type = 'Direct'
-# MAGIC                  THEN e.exposure_market_value ELSE 0 END) / 1e9, 4)
-# MAGIC                                                         AS direct_exposure_b,
-# MAGIC   ROUND(SUM(CASE WHEN e.source_type = 'ETF'
-# MAGIC                  THEN e.exposure_market_value ELSE 0 END) / 1e9, 4)
-# MAGIC                                                         AS etf_exposure_b,
-# MAGIC   ROUND(
-# MAGIC     SUM(CASE WHEN e.source_type = 'Direct' THEN e.exposure_market_value ELSE 0 END)
-# MAGIC     / NULLIF(SUM(e.exposure_market_value), 0) * 100, 2) AS direct_pct,
-# MAGIC   ROUND(
-# MAGIC     SUM(CASE WHEN e.source_type = 'ETF' THEN e.exposure_market_value ELSE 0 END)
-# MAGIC     / NULLIF(SUM(e.exposure_market_value), 0) * 100, 2) AS etf_pct,
-# MAGIC   COUNT(DISTINCT CASE WHEN e.source_type = 'Direct' THEN e.source_ticker END)
-# MAGIC                                                         AS direct_tickers,
-# MAGIC   COUNT(DISTINCT CASE WHEN e.source_type = 'ETF'    THEN e.source_ticker END)
-# MAGIC                                                         AS etf_vehicles
-# MAGIC FROM gold_portfolio_sector_exposure e
-# MAGIC WHERE
-# MAGIC   (array_contains(:advisor_id,   e.advisor_id)   OR :advisor_id   IS NULL)
-# MAGIC   AND (array_contains(:account_type, e.account_type) OR :account_type IS NULL)
-# MAGIC   AND (array_contains(:client_id,    e.client_id)    OR :client_id    IS NULL)
-# MAGIC   AND (array_contains(:sector,       e.sector)       OR :sector       IS NULL)
-# MAGIC   AND e.sector != 'Cash'
-# MAGIC GROUP BY e.sector
-# MAGIC ORDER BY total_exposure_b DESC
+# MAGIC   AND (e.source_type = :source_type                  OR :source_type  IS NULL)
 
 # COMMAND ----------
 
