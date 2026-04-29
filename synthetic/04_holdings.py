@@ -73,6 +73,26 @@ prices_raw = prices_raw.sort_values(["symbol", "date"])
 max_price_date = prices_raw["date"].max().date()
 print(f"Price history: {len(prices_raw)} rows | Latest date: {max_price_date}")
 
+# ETF → true asset class via bronze_etf_info.assetClass
+etf_asset_class_map = (
+    spark.table(uc_table("bronze_etf_info"))
+    .select("symbol", "assetClass")
+    .toPandas()
+    .set_index("symbol")["assetClass"]
+    .to_dict()
+)
+
+def resolve_asset_class(ticker, stored_class):
+    """Return the true IPS asset class. ETF vehicles are mapped via bronze_etf_info."""
+    if stored_class != "ETF":
+        return stored_class
+    etf_class = etf_asset_class_map.get(ticker, "Equity")
+    if etf_class in ("Fixed Income", "Bond"):
+        return "Fixed Income"
+    if etf_class in ("Commodity", "Commodities", "Real Estate", "Multi-Asset", "Alternative"):
+        return "Alternatives"
+    return "Equity"
+
 # Latest price per symbol (for current market value)
 latest_prices = (
     prices_raw[prices_raw["date"] == prices_raw["date"].max()]
@@ -189,19 +209,17 @@ for _, account in accounts_df.iterrows():
 
     rows = []
 
-    # ── Equity ─────────────────────────────────────────────────────────────────
+    # ── Equity (direct stocks + broad/sector ETFs) ────────────────────────────
+    # broad_etf_univ (SPY, QQQ, XL* sector ETFs, international ETFs) shares the
+    # Equity IPS budget. "ETF" is passed so the post-loop resolver maps every
+    # ticker through bronze_etf_info — stocks fall back to "Equity", equity ETFs
+    # resolve to "Equity", and any outlier (e.g. XLRE) gets its correct class.
     eq_budget = scaled_buckets.get("Equity", 0)
     if eq_budget > 0:
+        equity_pool = equity_universe + broad_etf_univ
         n = int(rng.integers(8, 25))
-        sample = list(rng.choice(equity_universe, size=min(n, len(equity_universe)), replace=False))
-        rows += make_positions(sample, "Equity", eq_budget, inception_date, account_id)
-
-    # ── ETF (broad market / sector) ────────────────────────────────────────────
-    etf_budget = scaled_buckets.get("ETF", 0)
-    if etf_budget > 0:
-        n = int(rng.integers(4, min(10, len(broad_etf_univ) + 1)))
-        sample = list(rng.choice(broad_etf_univ, size=min(n, len(broad_etf_univ)), replace=False))
-        rows += make_positions(sample, "ETF", etf_budget, inception_date, account_id)
+        sample = list(rng.choice(equity_pool, size=min(n, len(equity_pool)), replace=False))
+        rows += make_positions(sample, "ETF", eq_budget, inception_date, account_id)
 
     # ── Fixed Income ───────────────────────────────────────────────────────────
     fi_budget = scaled_buckets.get("Fixed Income", 0)
@@ -245,6 +263,12 @@ for _, account in accounts_df.iterrows():
     for r in rows:
         r["date"] = max_price_date
     all_holdings.extend(rows)
+
+# Resolve true asset class for every non-cash position.
+# Equity/FI/Alts/PC/Cash pass through unchanged; "ETF" is mapped via bronze_etf_info.
+for row in all_holdings:
+    if row["ticker"] != "CASH":
+        row["asset_class"] = resolve_asset_class(row["ticker"], row["asset_class"])
 
 holdings_df = pd.DataFrame(all_holdings)
 
