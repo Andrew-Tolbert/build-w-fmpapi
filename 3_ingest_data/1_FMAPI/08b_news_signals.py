@@ -26,6 +26,10 @@
 
 # COMMAND ----------
 
+dbutils.widgets.text("test_limit", "")  # empty = process all; set a number (e.g. "10") to cap rows for testing
+
+# COMMAND ----------
+
 # # Uncomment to fully reset — drops the silver table so all articles are re-processed
 # spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals")
 
@@ -52,6 +56,10 @@ spark.sql(f"""
 
 # COMMAND ----------
 
+# Build an optional LIMIT clause for testing — empty widget = no limit in production.
+_test_limit = dbutils.widgets.get("test_limit").strip()
+_limit_clause = f"LIMIT {_test_limit}" if _test_limit else ""
+
 # Count articles in bronze that have not yet been enriched in silver.
 # This gates the expensive AI function calls — skipped entirely if nothing is new.
 unprocessed_count = spark.sql(f"""
@@ -60,7 +68,7 @@ unprocessed_count = spark.sql(f"""
     LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals s
         ON n.symbol = s.symbol AND n.url = s.url
     WHERE n.title IS NOT NULL
-      AND LENGTH(TRIM(COALESCE(n.summary, n.title, ''))) > 0
+      AND LENGTH(TRIM(COALESCE(n.full_text, n.summary, n.title, ''))) > 0
 """).collect()[0][0]
 
 print(f"Unprocessed articles: {unprocessed_count}")
@@ -73,15 +81,15 @@ else:
     spark.sql(f"""
         INSERT INTO {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals
 
-        -- Step 1: isolate unprocessed articles (LIMIT 5 for testing)
+        -- Step 1: isolate unprocessed articles
         WITH unprocessed AS (
             SELECT n.*
             FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_stock_news n
             LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals s
                 ON n.symbol = s.symbol AND n.url = s.url
             WHERE n.title IS NOT NULL
-              AND LENGTH(TRIM(COALESCE(n.summary, n.title, ''))) > 0
-            LIMIT 5
+              AND LENGTH(TRIM(COALESCE(n.full_text, n.summary, n.title, ''))) > 0
+            {_limit_clause}
         ),
 
         -- Step 2: join company + ETF metadata and build context string
@@ -109,7 +117,7 @@ else:
                     '): ',
                     u.title,
                     '. ',
-                    COALESCE(u.summary, '')
+                    LEFT(COALESCE(u.full_text, u.summary, ''), 8000)
                 ) AS context_text
             FROM unprocessed u
             LEFT JOIN {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles cp
