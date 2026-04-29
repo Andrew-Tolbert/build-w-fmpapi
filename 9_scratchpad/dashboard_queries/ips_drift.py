@@ -58,9 +58,12 @@ spark.sql(f"USE SCHEMA {UC_SCHEMA}")
 print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # COMMAND ----------
+
 # DBTITLE 1,─── SECTION A: GOLD TABLE CREATION ─────────────────────────────────────────────
 
+
 # COMMAND ----------
+
 # DBTITLE 1,gold_account_ips_drift — Actual vs Target per Account × Asset Class
 # MAGIC %sql
 # MAGIC -- One row per (account_id, asset_class) — 6 rows per account.
@@ -98,31 +101,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC     it.asset_class
 # MAGIC   FROM (SELECT DISTINCT account_id FROM holdings) a
 # MAGIC   CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) it
-# MAGIC ),
-# MAGIC
-# MAGIC -- ── ETF sub-class enrichment from bronze_etf_info ────────────────────────
-# MAGIC -- For the ETF allocation bucket: what types of ETFs does each account hold?
-# MAGIC -- assetClass from FMP is e.g. "Equity", "Fixed Income", "Commodity", "Real Estate".
-# MAGIC etf_class_by_account AS (
-# MAGIC   SELECT
-# MAGIC     h.account_id,
-# MAGIC     ARRAY_JOIN(ARRAY_SORT(COLLECT_SET(ei.assetClass)), ' / ')  AS etf_asset_classes,
-# MAGIC     COUNT(DISTINCT ei.assetClass)                              AS etf_class_count,
-# MAGIC     ROUND(SUM(CASE WHEN ei.assetClass = 'Equity'
-# MAGIC                    THEN h.market_value ELSE 0 END)
-# MAGIC           / NULLIF(SUM(h.market_value), 0) * 100, 2)          AS etf_equity_pct,
-# MAGIC     ROUND(SUM(CASE WHEN ei.assetClass IN ('Fixed Income', 'Bond')
-# MAGIC                    THEN h.market_value ELSE 0 END)
-# MAGIC           / NULLIF(SUM(h.market_value), 0) * 100, 2)          AS etf_fixed_income_pct,
-# MAGIC     ROUND(SUM(CASE WHEN ei.assetClass IN ('Commodity', 'Commodities',
-# MAGIC                                            'Real Estate', 'Alternative',
-# MAGIC                                            'Multi-Asset')
-# MAGIC                    THEN h.market_value ELSE 0 END)
-# MAGIC           / NULLIF(SUM(h.market_value), 0) * 100, 2)          AS etf_other_pct
-# MAGIC   FROM holdings h
-# MAGIC   JOIN bronze_etf_info ei ON h.ticker = ei.symbol
-# MAGIC   WHERE h.asset_class = 'ETF'
-# MAGIC   GROUP BY h.account_id
 # MAGIC )
 # MAGIC
 # MAGIC SELECT
@@ -141,14 +119,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   ROUND(COALESCE(ab.actual_market_value, 0), 2)        AS actual_market_value,
 # MAGIC   ROUND(at.total_account_value, 2)                     AS total_account_value,
 # MAGIC   COALESCE(ab.positions_count, 0)                      AS positions_count,
-# MAGIC
-# MAGIC   -- ── ETF sub-type enrichment (ETF rows only; NULL for other asset classes) ──
-# MAGIC   -- Shows what types of ETFs are held within this account's ETF allocation bucket.
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ea.etf_asset_classes  ELSE NULL END AS etf_asset_classes,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ea.etf_class_count     ELSE NULL END AS etf_class_count,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ea.etf_equity_pct      ELSE NULL END AS etf_equity_pct,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ea.etf_fixed_income_pct ELSE NULL END AS etf_fixed_income_pct,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ea.etf_other_pct       ELSE NULL END AS etf_other_pct,
 # MAGIC
 # MAGIC   -- ── Actual allocation % ───────────────────────────────────────────────────
 # MAGIC   ROUND(
@@ -254,10 +224,9 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC                        AND g.asset_class   = it.asset_class
 # MAGIC LEFT JOIN actual_by_class ab
 # MAGIC   ON g.account_id = ab.account_id AND g.asset_class = ab.asset_class
-# MAGIC LEFT JOIN etf_class_by_account ea
-# MAGIC   ON g.account_id = ea.account_id
 
 # COMMAND ----------
+
 # DBTITLE 1,gold_client_ips_drift — Client-Level Drift Rollup
 # MAGIC %sql
 # MAGIC -- One row per (client_id, asset_class) rolled up across all of the client's accounts.
@@ -293,30 +262,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   SELECT ac.client_id, SUM(h.market_value) AS total_client_value
 # MAGIC   FROM holdings h
 # MAGIC   JOIN accounts ac ON h.account_id = ac.account_id
-# MAGIC   GROUP BY ac.client_id
-# MAGIC ),
-# MAGIC
-# MAGIC -- ── ETF sub-class enrichment (client level) ──────────────────────────────
-# MAGIC etf_class_by_client AS (
-# MAGIC   SELECT
-# MAGIC     ac.client_id,
-# MAGIC     ARRAY_JOIN(ARRAY_SORT(COLLECT_SET(ei.assetClass)), ' / ')  AS etf_asset_classes,
-# MAGIC     COUNT(DISTINCT ei.assetClass)                              AS etf_class_count,
-# MAGIC     ROUND(SUM(CASE WHEN ei.assetClass = 'Equity'
-# MAGIC                    THEN h.market_value ELSE 0 END)
-# MAGIC           / NULLIF(SUM(h.market_value), 0) * 100, 2)          AS etf_equity_pct,
-# MAGIC     ROUND(SUM(CASE WHEN ei.assetClass IN ('Fixed Income', 'Bond')
-# MAGIC                    THEN h.market_value ELSE 0 END)
-# MAGIC           / NULLIF(SUM(h.market_value), 0) * 100, 2)          AS etf_fixed_income_pct,
-# MAGIC     ROUND(SUM(CASE WHEN ei.assetClass IN ('Commodity', 'Commodities',
-# MAGIC                                            'Real Estate', 'Alternative',
-# MAGIC                                            'Multi-Asset')
-# MAGIC                    THEN h.market_value ELSE 0 END)
-# MAGIC           / NULLIF(SUM(h.market_value), 0) * 100, 2)          AS etf_other_pct
-# MAGIC   FROM holdings h
-# MAGIC   JOIN accounts ac ON h.account_id = ac.account_id
-# MAGIC   JOIN bronze_etf_info ei ON h.ticker = ei.symbol
-# MAGIC   WHERE h.asset_class = 'ETF'
 # MAGIC   GROUP BY ac.client_id
 # MAGIC )
 # MAGIC
@@ -416,13 +361,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   ROUND(it.max_allocation_pct    / 100 * ct.total_client_value, 2)
 # MAGIC                                                        AS max_market_value,
 # MAGIC
-# MAGIC   -- ── ETF sub-type enrichment (ETF rows only) ──────────────────────────────
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ec.etf_asset_classes   ELSE NULL END AS etf_asset_classes,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ec.etf_class_count      ELSE NULL END AS etf_class_count,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ec.etf_equity_pct       ELSE NULL END AS etf_equity_pct,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ec.etf_fixed_income_pct ELSE NULL END AS etf_fixed_income_pct,
-# MAGIC   CASE WHEN g.asset_class = 'ETF' THEN ec.etf_other_pct        ELSE NULL END AS etf_other_pct,
-# MAGIC
 # MAGIC   CURRENT_TIMESTAMP()                                  AS updated_at
 # MAGIC
 # MAGIC FROM client_class_grid g
@@ -432,16 +370,16 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC                      AND g.asset_class  = it.asset_class
 # MAGIC LEFT JOIN client_class_actual ca
 # MAGIC   ON g.client_id = ca.client_id AND g.asset_class = ca.asset_class
-# MAGIC LEFT JOIN etf_class_by_client ec
-# MAGIC   ON g.client_id = ec.client_id
 
 # COMMAND ----------
+
 # DBTITLE 1,─── SECTION B: LAKEVIEW DASHBOARD QUERIES ─────────────────────────────────────
 # Lakeview named parameter syntax: :param_name
 # Filter pattern: (array_contains(:param, column) OR :param IS NULL)
 # All filters are optional — omit or leave NULL to include all.
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 1 — IPS Drift Overview (Ranked by Breach Severity)
 # MAGIC %sql
 # MAGIC -- All accounts ranked by out-of-bounds severity.
@@ -489,6 +427,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   ABS(d.drift_from_target_pct) DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 2 — Allocation vs Band (Actual / Target / Min / Max per Account)
 # MAGIC %sql
 # MAGIC -- For each filtered account and asset class, shows the four key values:
@@ -535,6 +474,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY d.client_name, d.account_id, d.asset_class
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 3 — Drift Heatmap (All Clients × Asset Classes)
 # MAGIC %sql
 # MAGIC -- Client-level drift across all 6 asset classes.
@@ -569,6 +509,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY d.client_drift_score DESC, d.client_name, d.asset_class
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 4 — Advisor Book: Drift Summary per Advisor
 # MAGIC %sql
 # MAGIC -- Rolls up drift across each advisor's entire book of clients.
@@ -610,6 +551,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY total_rebalance_abs_m DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 5 — Rebalance Opportunity (Accounts Needing Action)
 # MAGIC %sql
 # MAGIC -- One row per account: total absolute rebalance $ and breach details.
@@ -655,70 +597,14 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY rebalance_to_band_abs_m DESC
 
 # COMMAND ----------
-# DBTITLE 1,[LAKEVIEW] 6 — ETF Bucket Breakdown by Asset Sub-Class
-# MAGIC %sql
-# MAGIC -- Drills into the ETF allocation bucket to show what types of ETFs are held.
-# MAGIC -- Uses bronze_etf_info.assetClass to classify each ETF position (Equity, Fixed Income, etc.)
-# MAGIC -- One row per (account_id, ETF ticker) — aggregate by etf_asset_class on front end.
-# MAGIC WITH
-# MAGIC filtered_accounts AS (
-# MAGIC   SELECT DISTINCT a.account_id
-# MAGIC   FROM accounts a
-# MAGIC   JOIN clients c ON a.client_id = c.client_id
-# MAGIC   WHERE
-# MAGIC     (array_contains(:advisor_id,   c.advisor_id)   OR :advisor_id   IS NULL)
-# MAGIC     AND (array_contains(:account_type, a.account_type) OR :account_type IS NULL)
-# MAGIC     AND (array_contains(:client_id,    a.client_id)    OR :client_id    IS NULL)
-# MAGIC )
-# MAGIC SELECT
-# MAGIC   h.account_id,
-# MAGIC   a.account_name,
-# MAGIC   a.account_type,
-# MAGIC   a.client_id,
-# MAGIC   c.client_name,
-# MAGIC   c.advisor_id,
-# MAGIC   c.tier,
-# MAGIC   c.risk_profile,
-# MAGIC   h.ticker,
-# MAGIC   ei.name                                          AS etf_name,
-# MAGIC   ei.assetClass                                    AS etf_asset_class,
-# MAGIC   ei.expenseRatio,
-# MAGIC   ei.assetsUnderManagement                         AS etf_aum,
-# MAGIC   ROUND(h.market_value, 2)                         AS position_market_value,
-# MAGIC   ROUND(h.market_value / NULLIF(
-# MAGIC     SUM(h.market_value) OVER (PARTITION BY h.account_id), 0) * 100, 4)
-# MAGIC                                                    AS pct_of_account,
-# MAGIC   -- IPS context for the ETF bucket
-# MAGIC   d.actual_allocation_pct                          AS etf_bucket_actual_pct,
-# MAGIC   d.target_allocation_pct                          AS etf_bucket_target_pct,
-# MAGIC   d.min_allocation_pct                             AS etf_bucket_min_pct,
-# MAGIC   d.max_allocation_pct                             AS etf_bucket_max_pct,
-# MAGIC   d.drift_status                                   AS etf_bucket_drift_status,
-# MAGIC   d.out_of_bounds_pct                              AS etf_bucket_out_of_bounds_pct,
-# MAGIC   -- ETF sub-type mix for this account
-# MAGIC   d.etf_asset_classes,
-# MAGIC   d.etf_equity_pct,
-# MAGIC   d.etf_fixed_income_pct,
-# MAGIC   d.etf_other_pct
-# MAGIC FROM holdings h
-# MAGIC JOIN accounts a    ON h.account_id = a.account_id
-# MAGIC JOIN clients  c    ON a.client_id  = c.client_id
-# MAGIC JOIN bronze_etf_info ei ON h.ticker = ei.symbol
-# MAGIC JOIN filtered_accounts fa ON h.account_id = fa.account_id
-# MAGIC -- Bring in the IPS drift context for the ETF bucket
-# MAGIC LEFT JOIN gold_account_ips_drift d
-# MAGIC   ON h.account_id = d.account_id AND d.asset_class = 'ETF'
-# MAGIC WHERE h.asset_class = 'ETF'
-# MAGIC   AND (array_contains(:ticker, h.ticker) OR :ticker IS NULL)
-# MAGIC ORDER BY h.account_id, h.market_value DESC
 
-# COMMAND ----------
 # DBTITLE 1,─── SECTION C: GENIE CONTEXT QUERIES ─────────────────────────────────────────
 # Static SQL designed for Genie space context.
 # Each query answers a specific natural language question an advisor might ask.
 # Paste the SQL block into Genie alongside its suggested question.
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Which clients have the worst IPS drift?"
 # MAGIC %sql
 # MAGIC -- Ranks all clients by drift score (avg |drift from target| across 6 asset classes).
@@ -748,6 +634,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC LIMIT 30
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Which accounts are overweight in Private Credit?"
 # MAGIC %sql
 # MAGIC -- Finds every account where Private Credit allocation exceeds the IPS maximum.
@@ -778,6 +665,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY d.out_of_bounds_pct DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Show me all accounts outside their IPS bounds"
 # MAGIC %sql
 # MAGIC -- All (account × asset_class) cells currently breaching the IPS min/max band.
@@ -806,6 +694,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY d.out_of_bounds_pct DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "What is the total rebalance amount needed across all accounts?"
 # MAGIC %sql
 # MAGIC -- Aggregates rebalance dollars by asset class and drift direction.
@@ -827,6 +716,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY rebalance_abs_m DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Which advisors have the most clients with IPS drift?"
 # MAGIC %sql
 # MAGIC -- Advisor-level view: clients affected, breach count, and rebalance urgency.
@@ -848,6 +738,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY total_rebalance_abs_m DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "What is the average allocation vs target by asset class across all clients?"
 # MAGIC %sql
 # MAGIC -- Book-wide view: for each asset class, how does the average actual allocation
@@ -868,25 +759,3 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC FROM gold_account_ips_drift d
 # MAGIC GROUP BY d.asset_class
 # MAGIC ORDER BY ABS(avg_drift_pct) DESC
-
-# COMMAND ----------
-# DBTITLE 1,[GENIE] "What types of ETFs are in the portfolio and how are they allocated?"
-# MAGIC %sql
-# MAGIC -- Shows the ETF bucket composition across all accounts, segmented by ETF asset class.
-# MAGIC -- Uses bronze_etf_info.assetClass to reveal whether the ETF bucket is equity-heavy,
-# MAGIC -- fixed-income-heavy, or mixed — critical for understanding true economic exposure.
-# MAGIC SELECT
-# MAGIC   ei.assetClass                                      AS etf_asset_class,
-# MAGIC   COUNT(DISTINCT h.ticker)                           AS distinct_etfs,
-# MAGIC   COUNT(DISTINCT a.client_id)                        AS clients_holding,
-# MAGIC   ROUND(SUM(h.market_value) / 1e9, 3)               AS total_mv_b,
-# MAGIC   ROUND(SUM(h.market_value) / NULLIF(
-# MAGIC     SUM(SUM(h.market_value)) OVER (), 0) * 100, 2)   AS pct_of_etf_bucket,
-# MAGIC   ROUND(AVG(ei.expenseRatio), 4)                    AS avg_expense_ratio,
-# MAGIC   ARRAY_JOIN(ARRAY_SORT(COLLECT_SET(h.ticker)), ', ') AS tickers
-# MAGIC FROM holdings h
-# MAGIC JOIN accounts a    ON h.account_id = a.account_id
-# MAGIC JOIN bronze_etf_info ei ON h.ticker = ei.symbol
-# MAGIC WHERE h.asset_class = 'ETF'
-# MAGIC GROUP BY ei.assetClass
-# MAGIC ORDER BY total_mv_b DESC

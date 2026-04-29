@@ -45,10 +45,6 @@
 
 # COMMAND ----------
 
-
-
-# COMMAND ----------
-
 # DBTITLE 1,FINAL QUERY
 # MAGIC %sql
 # MAGIC WITH

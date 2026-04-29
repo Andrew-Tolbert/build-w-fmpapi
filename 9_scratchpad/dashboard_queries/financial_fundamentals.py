@@ -53,9 +53,12 @@ spark.sql(f"USE SCHEMA {UC_SCHEMA}")
 print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # COMMAND ----------
+
 # DBTITLE 1,─── SECTION A: SILVER / GOLD TABLE CREATION ────────────────────────────────────
 
+
 # COMMAND ----------
+
 # DBTITLE 1,silver_company_fundamentals — Dated Financial Data per Fiscal Period
 # MAGIC %sql
 # MAGIC -- One row per (symbol, period, date).
@@ -243,6 +246,13 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   ON i.symbol = lp.symbol
 
 # COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from silver_company_fundamentals 
+# MAGIC
+
+# COMMAND ----------
+
 # DBTITLE 1,gold_company_kpis — Current Snapshot (Latest Period per Symbol)
 # MAGIC %sql
 # MAGIC -- One row per symbol: latest fiscal period, with all KPIs from silver.
@@ -257,6 +267,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC WHERE _rn = 1
 
 # COMMAND ----------
+
 # DBTITLE 1,gold_portfolio_fundamentals — Holdings + Latest Fundamentals + Client Context
 # MAGIC %sql
 # MAGIC -- One row per (account_id, ticker) for all non-cash held positions.
@@ -376,6 +387,12 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC WHERE h.ticker != 'CASH'
 
 # COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from gold_portfolio_fundamentals
+
+# COMMAND ----------
+
 # DBTITLE 1,─── SECTION B: LAKEVIEW DASHBOARD QUERIES ─────────────────────────────────────
 # NOTE: These queries use Lakeview named parameter syntax (:param_name).
 # All filter parameters are optional — NULL or empty means "include all".
@@ -388,6 +405,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 #   3. Wire widget values to the named parameters
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 1 — Portfolio Fundamentals Snapshot
 # MAGIC %sql
 # MAGIC -- Current fundamentals for each held position.
@@ -469,6 +487,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY g.market_value DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 2 — Revenue & Earnings Trend (Quarterly Time Series)
 # MAGIC %sql
 # MAGIC -- Quarterly revenue, EBITDA, and net income over time for tickers held in the
@@ -513,6 +532,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY f.symbol, f.date
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 3 — Leverage & Credit Risk Trend
 # MAGIC %sql
 # MAGIC -- Net debt/EBITDA, interest coverage, and DSCR over time for held tickers.
@@ -577,6 +597,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY f.symbol, f.date
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 4 — Analyst Sentiment Snapshot
 # MAGIC %sql
 # MAGIC -- Current analyst consensus, price targets, and upside potential for each position.
@@ -625,6 +646,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY g.analyst_upside_pct DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 5 — Margin Trends (Quarterly Time Series)
 # MAGIC %sql
 # MAGIC -- Gross, EBITDA, and net profit margins over time for held tickers.
@@ -670,6 +692,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY f.symbol, f.date
 
 # COMMAND ----------
+
 # DBTITLE 1,[LAKEVIEW] 6 — Valuation vs Sector Peers
 # MAGIC %sql
 # MAGIC -- Current valuation multiples for held tickers vs sector median.
@@ -738,6 +761,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY ht.total_mv DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,─── SECTION C: GENIE CONTEXT QUERIES ─────────────────────────────────────────
 # These are static SQL queries designed to be added as Genie context.
 # They answer specific natural language questions a wealth advisor might ask.
@@ -745,6 +769,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # as a named example query with its suggested natural language question.
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "What are the most leveraged positions in the portfolio?"
 # MAGIC %sql
 # MAGIC -- Ranks all held positions by net debt / EBITDA, highest first.
@@ -780,6 +805,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC LIMIT 25
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Which holdings have the strongest revenue growth?"
 # MAGIC %sql
 # MAGIC -- Shows revenue growth YoY and 3-period trend for each held ticker.
@@ -810,6 +836,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC LIMIT 25
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Which positions have the most analyst upside?"
 # MAGIC %sql
 # MAGIC -- Ranks held positions by analyst price target upside (target consensus vs current price).
@@ -841,6 +868,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY k.analyst_upside_pct DESC NULLS LAST
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Show me the risk metrics for private credit and BDC holdings"
 # MAGIC %sql
 # MAGIC -- Focused view on BDC / private credit positions (asset_class = 'Private Credit').
@@ -885,6 +913,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY k.net_debt_to_ebitda DESC NULLS LAST
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "What is the analyst consensus breakdown across the portfolio?"
 # MAGIC %sql
 # MAGIC -- Summary of analyst consensus ratings across all held tickers.
@@ -906,6 +935,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY total_mv_b DESC
 
 # COMMAND ----------
+
 # DBTITLE 1,[GENIE] "Which holdings are trading above their analyst price target?"
 # MAGIC %sql
 # MAGIC -- Identifies positions where the current price exceeds the analyst consensus target.
