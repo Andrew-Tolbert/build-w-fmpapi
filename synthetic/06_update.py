@@ -112,7 +112,7 @@ else:
         except Exception:
             div_yields = {}
 
-        income_assets = {"Equity", "ETF", "Fixed Income", "Private Credit"}
+        income_assets = {"Equity", "Fixed Income", "Private Credit"}
         new_txns = []
 
         for _, account in accounts_df.iterrows():
