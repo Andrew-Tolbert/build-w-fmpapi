@@ -73,7 +73,7 @@ else:
     spark.sql(f"""
         INSERT INTO {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals
 
-        -- Step 1: isolate unprocessed articles
+        -- Step 1: isolate unprocessed articles (LIMIT 5 for testing)
         WITH unprocessed AS (
             SELECT n.*
             FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_stock_news n
@@ -81,6 +81,7 @@ else:
                 ON n.symbol = s.symbol AND n.url = s.url
             WHERE n.title IS NOT NULL
               AND LENGTH(TRIM(COALESCE(n.summary, n.title, ''))) > 0
+            LIMIT 5
         ),
 
         -- Step 2: join company + ETF metadata and build context string
@@ -119,7 +120,7 @@ else:
 
         -- Step 3: call each AI function exactly once per article.
         -- ai_classify V2: JSON labels with descriptions + instructions field for domain context.
-        -- Returns VARIANT {"response": ["label"], "error_message": null} — extracted in Step 4.
+        -- Returns VARIANT with response array and error_message — extracted in Step 4.
         signals AS (
             SELECT
                 symbol,
@@ -133,13 +134,13 @@ else:
                 ai_analyze_sentiment(context_text) AS sentiment,
                 ai_classify(
                     context_text,
-                    '{"Earnings":          "Quarterly or annual earnings results, EPS beats or misses, revenue surprises, profit warnings",
+                    '{{"Earnings":          "Quarterly or annual earnings results, EPS beats or misses, revenue surprises, profit warnings",
                       "M&A":               "Mergers, acquisitions, divestitures, takeover bids, spin-offs, or strategic combinations",
                       "Credit Event":      "Covenant breaches, credit rating downgrades, non-accrual designations, PIK interest toggles, debt restructurings, or NAV deterioration in BDCs",
                       "Management Change": "CEO, CFO, CIO, or board-level departures, appointments, or leadership transitions",
                       "Guidance":          "Forward revenue or earnings guidance raised, lowered, or withdrawn by company management",
                       "Regulatory":        "Government investigations, SEC enforcement actions, fines, sanctions, compliance failures, or new regulations materially affecting the company",
-                      "Other":             "News that does not fit the above categories"}',
+                      "Other":             "News that does not fit the above categories"}}',
                     MAP(
                         'instructions',
                         'You are classifying financial news articles for a Goldman Sachs wealth management platform serving ultra-high-net-worth clients. Securities include large-cap equities, sector ETFs, and Business Development Companies (BDCs) that lend to private companies. Classify each article by its PRIMARY financial significance to an investor holding the security. Credit Events are the highest-priority category — prioritize this label for any BDC non-accrual designation, PIK interest toggle, covenant headroom compression, or NAV deterioration. Classify based on financial impact to the position, not the tone of the article.'
@@ -147,9 +148,9 @@ else:
                 )                          AS _signal_type_raw,
                 ai_classify(
                     context_text,
-                    '{"High":   "Likely to move the position price more than 5%, or requires an immediate client conversation — earnings misses, M&A announcements, credit downgrades, CEO departures, covenant breaches",
+                    '{{"High":   "Likely to move the position price more than 5%, or requires an immediate client conversation — earnings misses, M&A announcements, credit downgrades, CEO departures, covenant breaches",
                       "Medium": "Relevant context that should be monitored but does not require immediate action — analyst rating changes, minor guidance revisions, sector commentary, management commentary",
-                      "Low":    "Informational or background news with minimal near-term price impact — product updates, routine filings, general industry news"}',
+                      "Low":    "Informational or background news with minimal near-term price impact — product updates, routine filings, general industry news"}}',
                     MAP(
                         'instructions',
                         'You are assessing the financial materiality of news articles for a Goldman Sachs wealth management platform. Consider the potential impact on portfolio positions held by ultra-high-net-worth clients. BDC credit events and private credit stress signals should be rated High even when described in neutral language, as they directly affect client income and capital.'
