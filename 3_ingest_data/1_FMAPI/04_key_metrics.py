@@ -174,7 +174,3 @@ for suffix, table in [
     )
     df.write.mode("overwrite").saveAsTable(f"{UC_CATALOG}.{UC_SCHEMA}.{table}")
     print(f"Loaded {df.count()} rows into {UC_CATALOG}.{UC_SCHEMA}.{table}")
-
-# COMMAND ----------
-
-

@@ -3,7 +3,7 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # dependencies = [
-#   "edgartools",
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
 # ]
 # ///
 # BDC Early Warning System — SQL-first implementation
@@ -34,11 +34,6 @@
 # COMMAND ----------
 
 # MAGIC %run ../../utils/fmp_client
-
-# COMMAND ----------
-
-# DBTITLE 1,Install edgartools
-# MAGIC %pip install edgartools --quiet
 
 # COMMAND ----------
 
@@ -451,9 +446,13 @@ TABLE_TS  = f"{UC_CATALOG}.{UC_SCHEMA}.bdc_time_series"
 TABLE_FY  = f"{UC_CATALOG}.{UC_SCHEMA}.bdc_fy_snapshot"
 
 spark.createDataFrame(bdc_time_series).write.mode("overwrite").saveAsTable(TABLE_TS)
-spark.createDataFrame(bdc_fy_snapshot).write.mode("overwrite").saveAsTable(TABLE_FY)
+spark.createDataFrame(bdc_fy_snapshot).write.mode("overwrite").saveAsTable(TABLE_FY, mergeSchema=True)
 
 print(f"Wrote {TABLE_TS} and {TABLE_FY}")
+
+# COMMAND ----------
+
+jkhhjhlkjh
 
 # COMMAND ----------
 
