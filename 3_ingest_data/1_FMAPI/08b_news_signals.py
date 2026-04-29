@@ -39,7 +39,7 @@ dbutils.widgets.text("test_limit", "")  # empty = process all; set a number (e.g
 # COMMAND ----------
 
 # # Uncomment to fully reset — drops the silver table so all articles are re-processed
-# spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals")
+#spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals")
 
 # COMMAND ----------
 
@@ -302,5 +302,9 @@ else:
 
 display(
     spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.silver_news_signals")
-        .orderBy("processed_at", ascending=False)
+        .orderBy("processed_at", ascending=False).filter("is_relevant = True")
 )
+
+# COMMAND ----------
+
+

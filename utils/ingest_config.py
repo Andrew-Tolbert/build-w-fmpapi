@@ -16,7 +16,7 @@ import datetime
 dbutils.widgets.text(    "uc_catalog",         "ahtsa")
 dbutils.widgets.text(    "uc_schema",          "awm")
 dbutils.widgets.text(    "secret_key",         "fmapi")
-dbutils.widgets.dropdown("limited_load",       "true", ["true", "false"])
+dbutils.widgets.dropdown("limited_load",       "false", ["true", "false"])
 dbutils.widgets.text(    "history_start_date", "2023-01-01")
 
 # COMMAND ----------
