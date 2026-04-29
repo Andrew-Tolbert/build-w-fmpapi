@@ -139,6 +139,15 @@ resources:
             base_parameters:
               <<: *base_params
 
+        - task_key: ingest_fmapi_08b_news_signals
+          depends_on:
+            - task_key: ingest_fmapi_08_news
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "3_ingest_data/1_FMAPI/08b_news_signals"
+            base_parameters:
+              <<: *base_params
+
     # ══════════════════════════════════════════════════════════════════════════
     # MONTHLY — reference data, filings, earnings; updated end-of-month
     # Schedule: 3:00 AM UTC on the 1st of each month
