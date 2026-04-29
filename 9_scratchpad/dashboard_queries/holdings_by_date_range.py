@@ -210,7 +210,8 @@
 # MAGIC   SELECT * FROM cash_rows
 # MAGIC )
 # MAGIC
-# MAGIC -- ── Final output — enriched with account and client metadata ─────────────────
+# MAGIC -- ── Position-level metrics (pre sector expansion) ────────────────────────────
+# MAGIC position_level AS (
 # MAGIC SELECT
 # MAGIC   -- Period context
 # MAGIC   (SELECT start_price_dt FROM price_dates) AS period_start_price_date,
@@ -296,7 +297,100 @@
 # MAGIC JOIN accounts a      ON ah.account_id = a.account_id
 # MAGIC JOIN clients  c      ON a.client_id   = c.client_id
 # MAGIC CROSS JOIN benchmark bm
-# MAGIC ORDER BY c.client_name, ah.account_id, ah.asset_class, ah.ticker
+# MAGIC )
+# MAGIC
+# MAGIC -- ── Final output — sector look-through applied ───────────────────────────────
+# MAGIC -- ETF positions fan out into N sector rows via bronze_etf_sectors.
+# MAGIC -- All dollar metrics are multiplied by weight_in_source so SUM() remains correct
+# MAGIC -- at any grain. Rate columns (period_return_pct, unrealized_gl_pct) are unchanged.
+# MAGIC -- Sector weights reflect the latest bronze_etf_sectors fetch, not point-in-time.
+# MAGIC SELECT
+# MAGIC   -- ── Period context ────────────────────────────────────────────────────────
+# MAGIC   pl.period_start_price_date,
+# MAGIC   pl.as_of_date,
+# MAGIC   pl.benchmark_symbol,
+# MAGIC   pl.benchmark_return,
+# MAGIC   pl.benchmark_return_pct,
+# MAGIC
+# MAGIC   -- ── Client / account ─────────────────────────────────────────────────────
+# MAGIC   pl.client_id,
+# MAGIC   pl.client_name,
+# MAGIC   pl.advisor_id,
+# MAGIC   pl.tier,
+# MAGIC   pl.risk_profile,
+# MAGIC   pl.account_id,
+# MAGIC   pl.account_name,
+# MAGIC   pl.account_type,
+# MAGIC
+# MAGIC   -- ── Position ─────────────────────────────────────────────────────────────
+# MAGIC   pl.ticker,
+# MAGIC   pl.asset_class,
+# MAGIC
+# MAGIC   -- ── Sector look-through ──────────────────────────────────────────────────
+# MAGIC   CASE
+# MAGIC     WHEN pl.ticker = 'CASH'         THEN 'Cash'
+# MAGIC     WHEN es.etf_symbol IS NOT NULL  THEN COALESCE(es.sector, 'Unknown')
+# MAGIC     ELSE COALESCE(cp.sector, 'Unknown')
+# MAGIC   END                                                    AS sector,
+# MAGIC   CASE
+# MAGIC     WHEN es.etf_symbol IS NULL AND pl.ticker != 'CASH'
+# MAGIC     THEN COALESCE(cp.industry, 'Unknown')
+# MAGIC   END                                                    AS industry,
+# MAGIC   CASE WHEN es.etf_symbol IS NOT NULL THEN 'ETF' ELSE 'Direct' END
+# MAGIC                                                          AS source_type,
+# MAGIC   COALESCE(es.weightPercentage / 100, 1.0)               AS weight_in_source,
+# MAGIC
+# MAGIC   -- ── Per-share / rate columns (not scaled — position-level rates) ─────────
+# MAGIC   pl.price,
+# MAGIC   pl.cost_basis_per_share,
+# MAGIC   pl.period_cost_basis_per_share,
+# MAGIC   pl.period_return_pct,
+# MAGIC   pl.unrealized_gl_pct,
+# MAGIC
+# MAGIC   -- ── Dollar columns scaled by weight (additive at any grain) ─────────────
+# MAGIC   ROUND(pl.quantity                      * COALESCE(es.weightPercentage/100, 1.0), 4)
+# MAGIC                                                          AS quantity,
+# MAGIC   ROUND(pl.market_value                  * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS market_value,
+# MAGIC   ROUND(pl.total_cost_basis              * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS total_cost_basis,
+# MAGIC   ROUND(pl.unrealized_gl                 * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS unrealized_gl,
+# MAGIC   ROUND(pl.market_value_at_period_start  * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS market_value_at_period_start,
+# MAGIC   ROUND(pl.period_total_cost_basis       * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS period_total_cost_basis,
+# MAGIC   ROUND(pl.period_pl                     * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS period_pl,
+# MAGIC
+# MAGIC   -- ── Portfolio weight columns scaled by weight ─────────────────────────────
+# MAGIC   -- SUM(pct_of_account) for a sector = that sector's share of the account
+# MAGIC   ROUND(pl.pct_of_account                * COALESCE(es.weightPercentage/100, 1.0), 4)
+# MAGIC                                                          AS pct_of_account,
+# MAGIC   ROUND(pl.pct_of_client_portfolio       * COALESCE(es.weightPercentage/100, 1.0), 4)
+# MAGIC                                                          AS pct_of_client_portfolio,
+# MAGIC   ROUND(pl.pct_of_total_aum              * COALESCE(es.weightPercentage/100, 1.0), 6)
+# MAGIC                                                          AS pct_of_total_aum,
+# MAGIC
+# MAGIC   -- ── Return / alpha contributions scaled by weight ─────────────────────────
+# MAGIC   -- SUM(contribution_to_account_return) by sector = sector's contribution to account return
+# MAGIC   ROUND(pl.contribution_to_account_return * COALESCE(es.weightPercentage/100, 1.0), 6)
+# MAGIC                                                          AS contribution_to_account_return,
+# MAGIC   ROUND(pl.contribution_to_client_return  * COALESCE(es.weightPercentage/100, 1.0), 6)
+# MAGIC                                                          AS contribution_to_client_return,
+# MAGIC   ROUND(pl.contribution_to_aum_return     * COALESCE(es.weightPercentage/100, 1.0), 8)
+# MAGIC                                                          AS contribution_to_aum_return,
+# MAGIC   ROUND(pl.account_alpha_contribution     * COALESCE(es.weightPercentage/100, 1.0), 6)
+# MAGIC                                                          AS account_alpha_contribution,
+# MAGIC   ROUND(pl.client_alpha_contribution      * COALESCE(es.weightPercentage/100, 1.0), 6)
+# MAGIC                                                          AS client_alpha_contribution,
+# MAGIC   ROUND(pl.aum_alpha_contribution         * COALESCE(es.weightPercentage/100, 1.0), 8)
+# MAGIC                                                          AS aum_alpha_contribution
+# MAGIC
+# MAGIC FROM position_level pl
+# MAGIC LEFT JOIN bronze_etf_sectors     es ON pl.ticker = es.etf_symbol
+# MAGIC LEFT JOIN bronze_company_profiles cp ON pl.ticker = cp.symbol
+# MAGIC ORDER BY pl.client_name, pl.account_id, pl.asset_class, pl.ticker, sector
 
 # COMMAND ----------
 
