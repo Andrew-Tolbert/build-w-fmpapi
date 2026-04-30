@@ -277,17 +277,31 @@ print("sec_filing_chunks updated.")
 # COMMAND ----------
 
 # ── Write log — one row per filing ─────────────────────────────────────────────
+# Base on filings_df (the work list), not chunks_df, so every attempted accession
+# is logged even when parsing produces 0 chunks.  Without this, a file that fails
+# to parse is never written to sec_parsed_log and keeps appearing as "new" on
+# every subsequent run.
 
-log_df = (
+chunk_stats = (
     chunks_df
-    .groupBy("symbol", "form_type", "accession")
+    .groupBy("accession")
     .agg(
         F.count("*").alias("chunks_written"),
         F.concat_ws(", ", F.sort_array(F.collect_set("section_name"))).alias("sections_found"),
     )
-    .join(filings_df.select("accession", "filename"), on="accession", how="left")
+)
+
+log_df = (
+    filings_df.select("symbol", "form_type", "accession", "filename")
+    .join(chunk_stats, on="accession", how="left")
+    .withColumn("chunks_written", F.coalesce(F.col("chunks_written"), F.lit(0)))
+    .withColumn("sections_found", F.coalesce(F.col("sections_found"), F.lit("")))
     .withColumn("parsed_at", F.current_timestamp())
 )
+
+failed = log_df.filter(F.col("chunks_written") == 0).count()
+if failed:
+    print(f"WARNING: {failed} accession(s) produced 0 chunks — logged but not in sec_filing_chunks.")
 
 log_df.createOrReplaceTempView("_new_log")
 
