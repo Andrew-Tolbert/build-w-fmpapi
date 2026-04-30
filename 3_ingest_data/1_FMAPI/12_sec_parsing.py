@@ -3,7 +3,7 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # dependencies = [
-#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
 # ]
 # ///
 # Parse downloaded 10-K and 8-K HTML into clean text chunks for LLM extraction and RAG.
@@ -14,10 +14,6 @@
 #
 # Uses mapInPandas to distribute HTML extraction across all cluster workers.
 # The driver only coordinates — all file I/O and parsing runs in parallel on executors.
-
-# COMMAND ----------
-
-# MAGIC %pip install trafilatura>=1.12.0 -q
 
 # COMMAND ----------
 
@@ -96,6 +92,10 @@ filings_df = (
 
 total = filings_df.count()
 print(f"Filings to parse: {total}")
+
+# COMMAND ----------
+
+filings_df.display()
 
 # COMMAND ----------
 
@@ -343,10 +343,12 @@ print("is_latest flags updated.")
 
 display(
     spark.sql(f"""
-        SELECT symbol, form_type, filing_date, accession, is_latest,
-               COUNT(*) AS chunk_count
+        SELECT *
         FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
-        GROUP BY symbol, form_type, filing_date, accession, is_latest
-        ORDER BY symbol, form_type, filing_date DESC
+        where symbol = 'AINV'
     """)
 )
+
+# COMMAND ----------
+
+
