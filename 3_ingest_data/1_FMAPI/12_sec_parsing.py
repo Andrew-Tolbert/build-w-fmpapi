@@ -25,6 +25,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField, StringType, IntegerType
 )
+from pyspark.sql.window import Window
 import pandas as pd
 
 # ── Optional full refresh ───────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ import pandas as pd
 # The volume files written by 05_sec_filings are NOT touched.
 dbutils.widgets.dropdown("full_refresh", "false", ["true", "false"])
 if dbutils.widgets.get("full_refresh") == "true":
-    for _tbl in ["sec_filing_chunks", "sec_parsed_log", "_sec_chunks_staging"]:
+    for _tbl in ["sec_filing_chunks", "sec_parsed_log", "_sec_chunks_staging", "_sec_filings_work"]:
         spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.{_tbl}")
         print(f"[full_refresh] Dropped {UC_CATALOG}.{UC_SCHEMA}.{_tbl}")
 
@@ -77,6 +78,12 @@ already_parsed = spark.sql(f"""
     SELECT DISTINCT accession FROM {UC_CATALOG}.{UC_SCHEMA}.sec_parsed_log
 """)
 
+# row_number is deterministic (alphabetically first symbol wins for shared accessions).
+# dropDuplicates is non-deterministic — a different symbol could be selected on each
+# lazy re-evaluation of this plan, causing symbol/filepath inconsistencies between
+# the mapInPandas call and the later log_df construction.
+_dedup_win = Window.partitionBy("accession").orderBy("symbol", "filename")
+
 filings_df = (
     spark.sql(f"""
         SELECT symbol, form_type, accession, filing_date, subdir, filename
@@ -84,19 +91,23 @@ filings_df = (
         WHERE  accession != 'NOACC'
     """)
     .join(already_parsed, on="accession", how="left_anti")
-    # 12 accessions in sec_filings_log are shared across multiple symbols
-    # (same filing downloaded for two tickers). Deduplicate so each accession
-    # is parsed exactly once — prevents duplicate chunks and broken MERGE.
-    .dropDuplicates(["accession"])
+    .withColumn("_rn", F.row_number().over(_dedup_win))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn")
     .withColumn("filepath", F.concat(
         F.lit(sec_base + "/"),
         F.col("subdir"), F.lit("/"),
         F.col("symbol"), F.lit("/"),
         F.col("filename")
     ))
-    # One partition per ~20 files — keeps tasks reasonably sized
-    .repartition(200)
 )
+
+# Materialize once — this plan is used 5 times (count, display, diagnostic,
+# mapInPandas, log_df join).  Without materializing, each evaluation re-runs the
+# anti-join and dedup against live tables, which is expensive and fragile.
+WORK_STAGING = f"{UC_CATALOG}.{UC_SCHEMA}._sec_filings_work"
+filings_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(WORK_STAGING)
+filings_df = spark.table(WORK_STAGING)
 
 total = filings_df.count()
 print(f"Filings to parse: {total}")
@@ -295,6 +306,7 @@ STAGING = f"{UC_CATALOG}.{UC_SCHEMA}._sec_chunks_staging"
 
 (
     filings_df
+    .repartition(200)   # scatter across workers for parallel file I/O
     .mapInPandas(_parse_batch, schema=CHUNK_SCHEMA)
     .withColumn("parsed_at", F.current_timestamp())
     .write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(STAGING)
@@ -310,20 +322,27 @@ print(f"Total chunks produced: {chunk_count:,}")
 
 chunks_df.createOrReplaceTempView("_new_chunks")
 
-spark.sql(f"""
-    MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks AS tgt
-    USING _new_chunks AS src
-    ON  tgt.accession    = src.accession
-    AND tgt.section_name = src.section_name
-    AND tgt.chunk_index  = src.chunk_index
-    WHEN MATCHED THEN UPDATE SET
-        tgt.chunk_text = src.chunk_text,
-        tgt.char_count = src.char_count,
-        tgt.parsed_at  = src.parsed_at
-    WHEN NOT MATCHED THEN INSERT *
-""")
-
-print("sec_filing_chunks updated.")
+try:
+    spark.sql(f"""
+        MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks AS tgt
+        USING _new_chunks AS src
+        ON  tgt.accession    = src.accession
+        AND tgt.section_name = src.section_name
+        AND tgt.chunk_index  = src.chunk_index
+        WHEN MATCHED THEN UPDATE SET
+            tgt.chunk_text = src.chunk_text,
+            tgt.char_count = src.char_count,
+            tgt.parsed_at  = src.parsed_at
+        WHEN NOT MATCHED THEN INSERT
+            (chunk_id, symbol, form_type, filing_date, accession,
+             section_name, chunk_index, chunk_text, char_count, parsed_at)
+        VALUES
+            (src.chunk_id, src.symbol, src.form_type, src.filing_date, src.accession,
+             src.section_name, src.chunk_index, src.chunk_text, src.char_count, src.parsed_at)
+    """)
+    print("sec_filing_chunks updated.")
+except Exception as e:
+    print(f"WARNING: sec_filing_chunks merge skipped — {e}")
 
 # COMMAND ----------
 
@@ -356,16 +375,18 @@ if failed:
 
 log_df.createOrReplaceTempView("_new_log")
 
-spark.sql(f"""
-    MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.sec_parsed_log AS log
-    USING _new_log AS src
-    ON  log.symbol    = src.symbol
-    AND log.accession = src.accession
-    WHEN MATCHED THEN UPDATE SET *
-    WHEN NOT MATCHED THEN INSERT *
-""")
-
-print("sec_parsed_log updated.")
+try:
+    spark.sql(f"""
+        MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.sec_parsed_log AS log
+        USING _new_log AS src
+        ON  log.symbol    = src.symbol
+        AND log.accession = src.accession
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+    """)
+    print("sec_parsed_log updated.")
+except Exception as e:
+    print(f"WARNING: sec_parsed_log merge skipped — {e}")
 
 # COMMAND ----------
 
