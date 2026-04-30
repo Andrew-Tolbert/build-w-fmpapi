@@ -27,7 +27,15 @@ from pyspark.sql.types import (
 )
 import pandas as pd
 
-apply_full_refresh("sec_parsed")
+# ── Optional full refresh ───────────────────────────────────────────────────────
+# Set the full_refresh job parameter to "true" to drop all three output tables so
+# every accession gets re-parsed from the volume HTML on the next run.
+# The volume files written by 05_sec_filings are NOT touched.
+dbutils.widgets.dropdown("full_refresh", "false", ["true", "false"])
+if dbutils.widgets.get("full_refresh") == "true":
+    for _tbl in ["sec_filing_chunks", "sec_parsed_log", "_sec_chunks_staging"]:
+        spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.{_tbl}")
+        print(f"[full_refresh] Dropped {UC_CATALOG}.{UC_SCHEMA}.{_tbl}")
 
 # COMMAND ----------
 
@@ -96,6 +104,49 @@ print(f"Filings to parse: {total}")
 # COMMAND ----------
 
 filings_df.display()
+
+# COMMAND ----------
+
+# ── Diagnostic: verify file access + extraction on the driver ──────────────────
+# Run before the distributed mapInPandas to surface the root cause when chunk_count
+# comes back 0.  Two failure modes:
+#   MISSING  → volume path is wrong; check sec_base / subdir / symbol columns
+#   NO TEXT  → file exists but trafilatura extracted nothing; likely empty HTML or
+#              an unsupported format (SGML, XBRL index page, redirect, etc.)
+
+import os as _os
+
+_sample = filings_df.limit(5).collect()
+_ok, _missing, _empty_parse = 0, 0, 0
+
+for _r in _sample:
+    _path = _r["filepath"]
+    if not _os.path.exists(_path):
+        print(f"MISSING  {_r['symbol']:6s} {_r['form_type']:8s}  {_path}")
+        _missing += 1
+        continue
+    _size = _os.path.getsize(_path)
+    try:
+        import trafilatura as _tf
+        with open(_path, "r", encoding="utf-8", errors="replace") as _f:
+            _html = _f.read(2_000_000)
+        _text = _tf.extract(_html, include_tables=True, include_links=False, favor_recall=True)
+        _chars = len(_text) if _text else 0
+        if _chars == 0:
+            print(f"NO TEXT  {_r['symbol']:6s} {_r['form_type']:8s}  {_size:>9,} B  → 0 chars")
+            _empty_parse += 1
+        else:
+            print(f"OK       {_r['symbol']:6s} {_r['form_type']:8s}  {_size:>9,} B  → {_chars:,} chars")
+            _ok += 1
+    except Exception as _e:
+        print(f"ERROR    {_r['symbol']:6s} {_r['form_type']:8s}  {_e}")
+        _empty_parse += 1
+
+print(f"\nSample: {_ok} OK / {_missing} missing / {_empty_parse} failed extraction (out of {len(_sample)})")
+if _missing:
+    print("ACTION: file paths are wrong — check volume_subdir, and subdir/symbol in sec_filings_log")
+if _empty_parse and not _missing:
+    print("ACTION: files exist but extraction failed — inspect raw HTML; may need a different parser")
 
 # COMMAND ----------
 
