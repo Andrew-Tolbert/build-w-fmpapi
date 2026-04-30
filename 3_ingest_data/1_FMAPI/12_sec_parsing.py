@@ -51,7 +51,8 @@ spark.sql(f"""
         chunk_index   INT,
         chunk_text    STRING,
         char_count    INT,
-        parsed_at     TIMESTAMP
+        parsed_at     TIMESTAMP,
+        is_latest     BOOLEAN
     ) USING DELTA
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 """)
@@ -335,10 +336,10 @@ try:
             tgt.parsed_at  = src.parsed_at
         WHEN NOT MATCHED THEN INSERT
             (chunk_id, symbol, form_type, filing_date, accession,
-             section_name, chunk_index, chunk_text, char_count, parsed_at)
+             section_name, chunk_index, chunk_text, char_count, parsed_at, is_latest)
         VALUES
             (src.chunk_id, src.symbol, src.form_type, src.filing_date, src.accession,
-             src.section_name, src.chunk_index, src.chunk_text, src.char_count, src.parsed_at)
+             src.section_name, src.chunk_index, src.chunk_text, src.char_count, src.parsed_at, false)
     """)
     print("sec_filing_chunks updated.")
 except Exception as e:
@@ -390,48 +391,45 @@ except Exception as e:
 
 # COMMAND ----------
 
-display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.sec_parsed_log").orderBy("parsed_at", ascending=False))
-
-# COMMAND ----------
-
-# ── Flag latest filing + chunks per (symbol, form_type) ────────────────────────
-# After each run, stamp is_latest=true on every chunk that belongs to the most
-# recent accession for a given ticker + doc type.  All older filings are set to
-# false.  On filing_date ties the lexicographically largest accession wins.
-
-existing_cols = {f.name for f in spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks").schema}
-if "is_latest" not in existing_cols:
-    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks ADD COLUMN is_latest BOOLEAN")
-    print("Added is_latest column to sec_filing_chunks.")
-
-spark.sql(f"""
-    CREATE OR REPLACE TEMP VIEW _latest_accessions AS
-    SELECT DISTINCT accession
-    FROM (
-        SELECT accession,
-               ROW_NUMBER() OVER (
-                   PARTITION BY symbol, form_type
-                   ORDER BY filing_date DESC, accession DESC
-               ) AS rn
-        FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
-    ) ranked
-    WHERE rn = 1
-""")
+# ── Flag latest filing per (symbol, form_type) ─────────────────────────────────
+# Stamp is_latest=true on every chunk belonging to the most recent accession for
+# each ticker + doc type.  Runs after both MERGEs so newly inserted chunks are
+# included.  On filing_date ties the lexicographically largest accession wins.
+# New rows are inserted with is_latest=false; this UPDATE sets the correct value.
 
 spark.sql(f"""
     UPDATE {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
-    SET is_latest = (accession IN (SELECT accession FROM _latest_accessions))
+    SET is_latest = (accession IN (
+        SELECT DISTINCT accession
+        FROM (
+            SELECT accession,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY symbol, form_type
+                       ORDER BY filing_date DESC, accession DESC
+                   ) AS rn
+            FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
+        ) ranked
+        WHERE rn = 1
+    ))
 """)
 
 print("is_latest flags updated.")
 
 # COMMAND ----------
 
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.sec_parsed_log").orderBy("parsed_at", ascending=False))
+
+# COMMAND ----------
+
 display(
     spark.sql(f"""
-        SELECT *
+        SELECT symbol, form_type,
+               COUNT(DISTINCT accession)               AS filings,
+               SUM(CASE WHEN is_latest THEN 1 ELSE 0 END) AS latest_chunks,
+               COUNT(*)                                AS total_chunks
         FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
-        where symbol = 'AINV'
+        GROUP BY symbol, form_type
+        ORDER BY symbol, form_type
     """)
 )
 
