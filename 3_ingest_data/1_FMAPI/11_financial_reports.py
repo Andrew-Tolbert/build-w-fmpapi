@@ -27,19 +27,45 @@
 
 # COMMAND ----------
 
+spark.sql(f"""
+    CREATE TABLE IF NOT EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_financial_reports (
+        _rescued_data STRING
+    )
+""")
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+
 checkpoint_path = f"{UC_VOLUME_PATH}/_checkpoints/bronze_financial_reports"
 schema_path     = f"{UC_VOLUME_PATH}/_schemas/bronze_financial_reports"
 source_path     = f"{UC_VOLUME_PATH}/financial_reports/*/*.json"
 
-query = (
+# Reset stale state from previous JSON-format run
+spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_financial_reports")
+dbutils.fs.rm(checkpoint_path, recurse=True)
+dbutils.fs.rm(schema_path, recurse=True)
+
+raw = (
     spark.readStream
         .format("cloudFiles")
-        .option("cloudFiles.format", "json")
-        .option("cloudFiles.inferColumnTypes", "true")
+        .option("cloudFiles.format", "text")
+        .option("wholetext", "true")
         .option("cloudFiles.schemaLocation", schema_path)
-        .option("multiLine", "true")
         .load(source_path)
-        .writeStream
+)
+
+cleaned = (
+    raw
+    .withColumn("doc", F.parse_json(F.col("value")))
+    .withColumn("symbol", F.regexp_extract(F.col("_metadata.file_path"), r"financial_reports/([^/]+)/", 1))
+    .withColumn("year", F.regexp_extract(F.col("_metadata.file_path"), r"/(\d{4})_", 1).cast("int"))
+    .withColumn("period", F.regexp_extract(F.col("_metadata.file_path"), r"_(\w+)\.json$", 1))
+    .drop("value")
+)
+
+query = (
+    cleaned.writeStream
         .format("delta")
         .option("checkpointLocation", checkpoint_path)
         .option("mergeSchema", "true")
@@ -53,4 +79,10 @@ print(f"bronze_financial_reports row count: {spark.table(f'{UC_CATALOG}.{UC_SCHE
 
 # COMMAND ----------
 
-display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_financial_reports").select("symbol", "year", "period").distinct().orderBy("symbol", "year", "period"))
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_financial_reports").orderBy("symbol", "year", "period"))
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select count(*) from ahtsa.awm.bronze_financial_reports
+# MAGIC  
