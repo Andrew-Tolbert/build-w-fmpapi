@@ -27,12 +27,8 @@
 #   rebalance_to_target    — $ to hit exact target (negative = sell)
 #   rebalance_to_band      — $ to get just back inside band (0 when in band)
 #
-# Lakeview parameters (all optional; NULL = no filter):
-#   :advisor_id   — advisor ID       (multi-select)
-#   :client_id    — client ID        (multi-select)
-#   :account_type — account type     (multi-select)
-#   :asset_class  — asset class      (multi-select)
-#   :drift_status — breach filter    (single-select)
+# Filtering is handled on the Lakeview front end — no :param syntax needed since
+# the result set is static (unlike holdings which rebuilds positions over a date range).
 
 # COMMAND ----------
 
@@ -50,13 +46,14 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # COMMAND ----------
 
-# DBTITLE 1,[LAKEVIEW] IPS Drift — One Row per Account × Asset Class
+# DBTITLE 1,gold_ips_drift — View (SELECT * for Lakeview / Genie)
 # MAGIC %sql
-# MAGIC -- One row per (account_id, asset_class).
+# MAGIC -- One row per (account_id, asset_class). Query this view directly in Lakeview
+# MAGIC -- and Genie — filter and aggregate on the front end.
 # MAGIC -- holdings.asset_class is already the true economic class — ETFs reclassified at
 # MAGIC -- write time via bronze_etf_info in 07_validate_and_rebuild_holdings.py.
-# MAGIC -- Asset classes with zero holdings still appear via cross-join so every IPS cell
-# MAGIC -- is visible. Lakeview can SUM, COUNT, or AVG any column at any grain on top of this.
+# MAGIC -- Asset classes with zero holdings still appear via cross-join so every IPS cell is visible.
+# MAGIC CREATE OR REPLACE VIEW gold_ips_drift AS
 # MAGIC WITH
 # MAGIC
 # MAGIC -- ── Total value per account ───────────────────────────────────────────────────
@@ -87,7 +84,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC     it.asset_class
 # MAGIC   FROM (SELECT DISTINCT account_id FROM holdings) a
 # MAGIC   CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) it
-# MAGIC )
+# MAGIC ),
 # MAGIC
 # MAGIC SELECT
 # MAGIC   -- ── Identity ──────────────────────────────────────────────────────────────
@@ -194,21 +191,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC                     AND g.asset_class  = it.asset_class
 # MAGIC LEFT JOIN actual_by_class ab
 # MAGIC   ON g.account_id = ab.account_id AND g.asset_class = ab.asset_class
-# MAGIC WHERE
-# MAGIC   (array_contains(:advisor_id,   c.advisor_id)    OR :advisor_id   IS NULL)
-# MAGIC   AND (array_contains(:client_id,    c.client_id)     OR :client_id    IS NULL)
-# MAGIC   AND (array_contains(:account_type, ac.account_type) OR :account_type IS NULL)
-# MAGIC   AND (array_contains(:asset_class,  g.asset_class)   OR :asset_class  IS NULL)
-# MAGIC   AND (
-# MAGIC     CASE
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            > it.max_allocation_pct THEN 'Over Band'
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            < it.min_allocation_pct THEN 'Under Band'
-# MAGIC       ELSE 'Within Band'
-# MAGIC     END = :drift_status OR :drift_status IS NULL
-# MAGIC   )
-# MAGIC ORDER BY c.client_name, ac.account_id, g.asset_class
 
 # COMMAND ----------
 
