@@ -28,16 +28,6 @@ from pyspark.sql.types import (
 from pyspark.sql.window import Window
 import pandas as pd
 
-# ── Optional full refresh ───────────────────────────────────────────────────────
-# Set the full_refresh job parameter to "true" to drop all three output tables so
-# every accession gets re-parsed from the volume HTML on the next run.
-# The volume files written by 05_sec_filings are NOT touched.
-dbutils.widgets.dropdown("full_refresh", "false", ["true", "false"])
-if dbutils.widgets.get("full_refresh") == "true":
-    for _tbl in ["sec_filing_chunks", "sec_parsed_log", "_sec_chunks_staging", "_sec_filings_work"]:
-        spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.{_tbl}")
-        print(f"[full_refresh] Dropped {UC_CATALOG}.{UC_SCHEMA}.{_tbl}")
-
 # COMMAND ----------
 
 spark.sql(f"""

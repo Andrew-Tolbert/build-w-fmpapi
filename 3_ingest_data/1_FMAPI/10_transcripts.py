@@ -18,20 +18,21 @@
 # COMMAND ----------
 
 # # Uncomment to fully reset — drops the table and clears the Autoloader checkpoint/schema
-# spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts")
-# dbutils.fs.rm(f"{UC_VOLUME_PATH}/_checkpoints/bronze_transcripts", recurse=True)
-# dbutils.fs.rm(f"{UC_VOLUME_PATH}/_schemas/bronze_transcripts", recurse=True)
+spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts")
+dbutils.fs.rm(f"{UC_VOLUME_PATH}/_checkpoints/bronze_transcripts", recurse=True)
+dbutils.fs.rm(f"{UC_VOLUME_PATH}/_schemas/bronze_transcripts", recurse=True)
 
 # COMMAND ----------
 
 spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts (
-        symbol  STRING,
-        year    INT,
-        quarter INT,
+        symbol  STRING NOT NULL,
+        year    INT    NOT NULL,
+        quarter INT    NOT NULL,
         date    STRING,
         title   STRING,
-        content STRING
+        content STRING,
+        id      STRING NOT NULL PRIMARY KEY
     )
     USING DELTA
 """)
@@ -65,3 +66,11 @@ print(f"bronze_transcripts row count: {spark.table(f'{UC_CATALOG}.{UC_SCHEMA}.br
 # COMMAND ----------
 
 display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts").orderBy("symbol", "year", "quarter"))
+
+# COMMAND ----------
+
+# DBTITLE 1,Full reset — drop table and clear Autoloader state
+spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts")
+dbutils.fs.rm(f"{UC_VOLUME_PATH}/_checkpoints/bronze_transcripts", recurse=True)
+dbutils.fs.rm(f"{UC_VOLUME_PATH}/_schemas/bronze_transcripts", recurse=True)
+print("Dropped bronze_transcripts and cleared checkpoint/schema directories.")
