@@ -345,13 +345,3 @@ display(
         ORDER BY symbol
     """)
 )
-
-# COMMAND ----------
-
-# DBTITLE 1,Full reset — drops both tables and clears Autoloader state
-# spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts")
-# spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks")
-# spark.sql(f"DROP TABLE IF EXISTS {UC_CATALOG}.{UC_SCHEMA}.transcript_parse_log")
-# dbutils.fs.rm(f"{UC_VOLUME_PATH}/_checkpoints/bronze_transcripts", recurse=True)
-# dbutils.fs.rm(f"{UC_VOLUME_PATH}/_schemas/bronze_transcripts", recurse=True)
-# print("Full reset complete.")
