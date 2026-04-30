@@ -203,24 +203,14 @@
 # MAGIC   WHERE cash_balance > 0
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Fee rows for the selected period ─────────────────────────────────────────
-# MAGIC -- FEE transactions have negative net_amount; stored as negative market_value so
-# MAGIC -- SUM(market_value) at any grain gives net AUM after fees.
-# MAGIC fee_rows AS (
+# MAGIC -- ── Advisory fees for the selected period ────────────────────────────────────
+# MAGIC -- Account-level quarterly advisory fee (ticker = 'ADVISORY_FEE').
+# MAGIC -- Prorated across positions by weight in position_level so SUM(fees_attributed)
+# MAGIC -- is correct at any grain (account, client, asset class, sector).
+# MAGIC period_fees AS (
 # MAGIC   SELECT
 # MAGIC     account_id,
-# MAGIC     'FEE'                  AS ticker,
-# MAGIC     'Fee'                  AS asset_class,
-# MAGIC     SUM(net_amount)        AS quantity,
-# MAGIC     1.0                    AS price,
-# MAGIC     SUM(net_amount)        AS market_value,
-# MAGIC     1.0                    AS cost_basis_per_share,
-# MAGIC     SUM(net_amount)        AS total_cost_basis,
-# MAGIC     0.0                    AS unrealized_gl,
-# MAGIC     0.0                    AS unrealized_gl_pct,
-# MAGIC     1.0                    AS start_price,
-# MAGIC     0.0                    AS period_return_pct,
-# MAGIC     1.0                    AS period_cost_basis_per_share
+# MAGIC     ABS(SUM(net_amount)) AS fees_paid
 # MAGIC   FROM transactions
 # MAGIC   WHERE action = 'FEE'
 # MAGIC     AND date BETWEEN (SELECT start_dt FROM params) AND (SELECT end_dt FROM params)
@@ -232,8 +222,6 @@
 # MAGIC   SELECT * FROM equity_rows
 # MAGIC   UNION ALL
 # MAGIC   SELECT * FROM cash_rows
-# MAGIC   UNION ALL
-# MAGIC   SELECT * FROM fee_rows
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Position-level metrics (pre sector expansion) ────────────────────────────
@@ -317,12 +305,22 @@
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price * (1 + bm.benchmark_return))
 # MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0), 8
-# MAGIC   ) AS aum_alpha_contribution
+# MAGIC   ) AS aum_alpha_contribution,
+# MAGIC
+# MAGIC   -- ── Fee attribution (prorated by position weight within account) ──────────
+# MAGIC   -- fees_attributed sums correctly at any grain — asset class, sector, client, etc.
+# MAGIC   -- fees_attributed / market_value = effective fee rate for that slice
+# MAGIC   ROUND(
+# MAGIC     COALESCE(pf.fees_paid, 0)
+# MAGIC     * ah.market_value
+# MAGIC     / NULLIF(SUM(ah.market_value) OVER (PARTITION BY ah.account_id), 0), 2
+# MAGIC   ) AS fees_attributed
 # MAGIC
 # MAGIC FROM all_holdings ah
 # MAGIC JOIN accounts a      ON ah.account_id = a.account_id
 # MAGIC JOIN clients  c      ON a.client_id   = c.client_id
 # MAGIC CROSS JOIN benchmark bm
+# MAGIC LEFT JOIN period_fees pf ON ah.account_id = pf.account_id
 # MAGIC )
 # MAGIC
 # MAGIC -- ── Final output — sector look-through applied ───────────────────────────────
@@ -411,7 +409,13 @@
 # MAGIC   ROUND(pl.client_alpha_contribution      * COALESCE(es.weightPercentage/100, 1.0), 6)
 # MAGIC                                                          AS client_alpha_contribution,
 # MAGIC   ROUND(pl.aum_alpha_contribution         * COALESCE(es.weightPercentage/100, 1.0), 8)
-# MAGIC                                                          AS aum_alpha_contribution
+# MAGIC                                                          AS aum_alpha_contribution,
+# MAGIC
+# MAGIC   -- ── Fees (prorated by position weight, then scaled by ETF sector weight) ──
+# MAGIC   -- SUM(fees_attributed) at any grain = total fees for that slice
+# MAGIC   -- SUM(fees_attributed) / SUM(market_value) = fees as % of AUM for that slice
+# MAGIC   ROUND(pl.fees_attributed               * COALESCE(es.weightPercentage/100, 1.0), 2)
+# MAGIC                                                          AS fees_attributed
 # MAGIC
 # MAGIC FROM position_level pl
 # MAGIC LEFT JOIN bronze_etf_sectors     es ON pl.ticker = es.etf_symbol
