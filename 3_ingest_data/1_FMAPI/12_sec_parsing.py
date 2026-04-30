@@ -305,3 +305,48 @@ print("sec_parsed_log updated.")
 # COMMAND ----------
 
 display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.sec_parsed_log").orderBy("parsed_at", ascending=False))
+
+# COMMAND ----------
+
+# ── Flag latest filing + chunks per (symbol, form_type) ────────────────────────
+# After each run, stamp is_latest=true on every chunk that belongs to the most
+# recent accession for a given ticker + doc type.  All older filings are set to
+# false.  On filing_date ties the lexicographically largest accession wins.
+
+existing_cols = {f.name for f in spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks").schema}
+if "is_latest" not in existing_cols:
+    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks ADD COLUMN is_latest BOOLEAN")
+    print("Added is_latest column to sec_filing_chunks.")
+
+spark.sql(f"""
+    CREATE OR REPLACE TEMP VIEW _latest_accessions AS
+    SELECT DISTINCT accession
+    FROM (
+        SELECT accession,
+               ROW_NUMBER() OVER (
+                   PARTITION BY symbol, form_type
+                   ORDER BY filing_date DESC, accession DESC
+               ) AS rn
+        FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
+    ) ranked
+    WHERE rn = 1
+""")
+
+spark.sql(f"""
+    UPDATE {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
+    SET is_latest = (accession IN (SELECT accession FROM _latest_accessions))
+""")
+
+print("is_latest flags updated.")
+
+# COMMAND ----------
+
+display(
+    spark.sql(f"""
+        SELECT symbol, form_type, filing_date, accession, is_latest,
+               COUNT(*) AS chunk_count
+        FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks
+        GROUP BY symbol, form_type, filing_date, accession, is_latest
+        ORDER BY symbol, form_type, filing_date DESC
+    """)
+)
