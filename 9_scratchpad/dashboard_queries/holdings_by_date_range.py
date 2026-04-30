@@ -203,12 +203,24 @@
 # MAGIC   WHERE cash_balance > 0
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Fees paid during the selected period ─────────────────────────────────────
-# MAGIC -- FEE transactions have negative net_amount; ABS() converts to positive dollars.
-# MAGIC period_fees AS (
+# MAGIC -- ── Fee rows for the selected period ─────────────────────────────────────────
+# MAGIC -- FEE transactions have negative net_amount; stored as negative market_value so
+# MAGIC -- SUM(market_value) at any grain gives net AUM after fees.
+# MAGIC fee_rows AS (
 # MAGIC   SELECT
 # MAGIC     account_id,
-# MAGIC     ABS(SUM(net_amount)) AS fees_paid
+# MAGIC     'FEE'                  AS ticker,
+# MAGIC     'Fee'                  AS asset_class,
+# MAGIC     SUM(net_amount)        AS quantity,
+# MAGIC     1.0                    AS price,
+# MAGIC     SUM(net_amount)        AS market_value,
+# MAGIC     1.0                    AS cost_basis_per_share,
+# MAGIC     SUM(net_amount)        AS total_cost_basis,
+# MAGIC     0.0                    AS unrealized_gl,
+# MAGIC     0.0                    AS unrealized_gl_pct,
+# MAGIC     1.0                    AS start_price,
+# MAGIC     0.0                    AS period_return_pct,
+# MAGIC     1.0                    AS period_cost_basis_per_share
 # MAGIC   FROM transactions
 # MAGIC   WHERE action = 'FEE'
 # MAGIC     AND date BETWEEN (SELECT start_dt FROM params) AND (SELECT end_dt FROM params)
@@ -220,7 +232,9 @@
 # MAGIC   SELECT * FROM equity_rows
 # MAGIC   UNION ALL
 # MAGIC   SELECT * FROM cash_rows
-# MAGIC )
+# MAGIC   UNION ALL
+# MAGIC   SELECT * FROM fee_rows
+# MAGIC ),
 # MAGIC
 # MAGIC -- ── Position-level metrics (pre sector expansion) ────────────────────────────
 # MAGIC position_level AS (
@@ -303,32 +317,12 @@
 # MAGIC   ROUND(
 # MAGIC     (ah.market_value - ah.quantity * ah.start_price * (1 + bm.benchmark_return))
 # MAGIC     / NULLIF(SUM(ah.quantity * ah.start_price) OVER (), 0), 8
-# MAGIC   ) AS aum_alpha_contribution,
-# MAGIC
-# MAGIC   -- ── Fee metrics ───────────────────────────────────────────────────────────
-# MAGIC   -- account_fees_paid: total fees charged to this account during the period
-# MAGIC   -- *_fees_pct_of_aum: fees / AUM at account / client / total grain × 100
-# MAGIC   -- These are account-level values repeated across position rows; use MAX() not SUM()
-# MAGIC   -- in the dashboard when aggregating at account grain to avoid double-counting.
-# MAGIC   ROUND(COALESCE(pf.fees_paid, 0), 2) AS account_fees_paid,
-# MAGIC   ROUND(
-# MAGIC     COALESCE(pf.fees_paid, 0)
-# MAGIC     / NULLIF(SUM(ah.market_value) OVER (PARTITION BY ah.account_id), 0) * 100, 4
-# MAGIC   ) AS account_fees_pct_of_aum,
-# MAGIC   ROUND(
-# MAGIC     COALESCE(SUM(pf.fees_paid) OVER (PARTITION BY c.client_id), 0)
-# MAGIC     / NULLIF(SUM(ah.market_value) OVER (PARTITION BY c.client_id), 0) * 100, 4
-# MAGIC   ) AS client_fees_pct_of_aum,
-# MAGIC   ROUND(
-# MAGIC     COALESCE(SUM(pf.fees_paid) OVER (), 0)
-# MAGIC     / NULLIF(SUM(ah.market_value) OVER (), 0) * 100, 4
-# MAGIC   ) AS total_fees_pct_of_aum
+# MAGIC   ) AS aum_alpha_contribution
 # MAGIC
 # MAGIC FROM all_holdings ah
 # MAGIC JOIN accounts a      ON ah.account_id = a.account_id
 # MAGIC JOIN clients  c      ON a.client_id   = c.client_id
 # MAGIC CROSS JOIN benchmark bm
-# MAGIC LEFT JOIN period_fees pf ON ah.account_id = pf.account_id
 # MAGIC )
 # MAGIC
 # MAGIC -- ── Final output — sector look-through applied ───────────────────────────────
@@ -417,14 +411,7 @@
 # MAGIC   ROUND(pl.client_alpha_contribution      * COALESCE(es.weightPercentage/100, 1.0), 6)
 # MAGIC                                                          AS client_alpha_contribution,
 # MAGIC   ROUND(pl.aum_alpha_contribution         * COALESCE(es.weightPercentage/100, 1.0), 8)
-# MAGIC                                                          AS aum_alpha_contribution,
-# MAGIC
-# MAGIC   -- ── Fee columns (account-level; not scaled by ETF weight) ────────────────
-# MAGIC   -- Use MAX() when aggregating by account in the dashboard — these repeat per row.
-# MAGIC   pl.account_fees_paid,
-# MAGIC   pl.account_fees_pct_of_aum,
-# MAGIC   pl.client_fees_pct_of_aum,
-# MAGIC   pl.total_fees_pct_of_aum
+# MAGIC                                                          AS aum_alpha_contribution
 # MAGIC
 # MAGIC FROM position_level pl
 # MAGIC LEFT JOIN bronze_etf_sectors     es ON pl.ticker = es.etf_symbol
