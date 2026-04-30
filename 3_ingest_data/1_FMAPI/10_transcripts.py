@@ -47,11 +47,18 @@ spark.sql(f"""
         quarter  INT     NOT NULL,
         date     STRING,
         title    STRING,
-        content  STRING,
-        id       STRING  NOT NULL
+        content  STRING
     )
     USING DELTA
 """)
+
+# Drop legacy id column if it exists (old schema had id NOT NULL which conflicts
+# with Autoloader since the JSON files don't contain an id field).
+try:
+    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts DROP COLUMN id")
+    print("Dropped legacy id column from bronze_transcripts.")
+except Exception:
+    pass  # column doesn't exist — nothing to do
 
 # ── Stage 2 table: chunks for vector search ───────────────────────────────────
 
