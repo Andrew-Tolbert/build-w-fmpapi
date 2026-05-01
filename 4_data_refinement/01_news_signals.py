@@ -44,13 +44,13 @@ spark.sql(f"""
         symbol                STRING,
         signal_date           DATE,
         source_type           STRING,
-        source_id             STRING,
         source_description    STRING,
         sentiment             STRING,
         severity_score        DOUBLE,
         advisor_action_needed BOOLEAN,
         signal_type           STRING,
         signal                STRING,
+        signal_value          STRING,
         rationale             STRING,
         processed_at          TIMESTAMP
     )
@@ -67,7 +67,7 @@ new_count = spark.sql(f"""
     SELECT COUNT(*)
     FROM {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals s
     LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
-        ON g.source_type = 'news' AND g.source_id = s.url AND g.symbol = s.symbol
+        ON g.signal_id = md5(CONCAT(s.symbol, '|', s.url))
     WHERE s.is_relevant = true
       AND s.signal_type IS NOT NULL
       AND s.sentiment   IS NOT NULL
@@ -100,7 +100,7 @@ else:
                     s.advisor_action
                 FROM {UC_CATALOG}.{UC_SCHEMA}.silver_news_signals s
                 LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
-                    ON g.source_type = 'news' AND g.source_id = s.url AND g.symbol = s.symbol
+                    ON g.signal_id = md5(CONCAT(s.symbol, '|', s.url))
                 WHERE s.is_relevant = true
                   AND s.signal_type IS NOT NULL
                   AND s.sentiment   IS NOT NULL
@@ -135,7 +135,6 @@ else:
                 symbol,
                 TRY_CAST(publishedDate AS DATE)                        AS signal_date,
                 'news'                                                 AS source_type,
-                url                                                    AS source_id,
                 title                                                  AS source_description,
                 INITCAP(COALESCE(sentiment, 'neutral'))                AS sentiment,
                 CASE materiality
@@ -146,6 +145,8 @@ else:
                 END                                                    AS severity_score,
                 COALESCE(advisor_action, false)                        AS advisor_action_needed,
                 signal_type,
+                signal_type                                            AS signal,
+                materiality                                            AS signal_value,
                 rationale,
                 CURRENT_TIMESTAMP()                                    AS processed_at
             FROM enriched
@@ -157,15 +158,17 @@ else:
             tgt.severity_score        = src.severity_score,
             tgt.advisor_action_needed = src.advisor_action_needed,
             tgt.signal_type           = src.signal_type,
+            tgt.signal                = src.signal,
+            tgt.signal_value          = src.signal_value,
             tgt.rationale             = src.rationale,
             tgt.processed_at          = src.processed_at
         WHEN NOT MATCHED THEN INSERT (
-            signal_id, symbol, signal_date, source_type, source_id, source_description,
-            sentiment, severity_score, advisor_action_needed, signal_type, rationale, processed_at
+            signal_id, symbol, signal_date, source_type, source_description,
+            sentiment, severity_score, advisor_action_needed, signal_type, signal, signal_value, rationale, processed_at
         ) VALUES (
-            src.signal_id, src.symbol, src.signal_date, src.source_type, src.source_id,
+            src.signal_id, src.symbol, src.signal_date, src.source_type,
             src.source_description, src.sentiment, src.severity_score, src.advisor_action_needed,
-            src.signal_type, src.rationale, src.processed_at
+            src.signal_type, src.signal, src.signal_value, src.rationale, src.processed_at
         )
     """)
     print(f"Merged {new_count} news signals into gold_unified_signals.")

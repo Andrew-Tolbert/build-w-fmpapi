@@ -57,13 +57,13 @@ spark.sql(f"""
         symbol                STRING,
         signal_date           DATE,
         source_type           STRING,
-        source_id             STRING,
         source_description    STRING,
         sentiment             STRING,
         severity_score        DOUBLE,
         advisor_action_needed BOOLEAN,
         signal_type           STRING,
         signal                STRING,
+        signal_value          STRING,
         rationale             STRING,
         processed_at          TIMESTAMP
     )
@@ -76,13 +76,11 @@ spark.sql(f"""
 _test_limit = dbutils.widgets.get("test_limit").strip()
 _limit_clause = f"LIMIT {_test_limit}" if _test_limit else ""
 
-# source_id for transcripts: "{symbol}|{year}|{quarter}"
 new_count = spark.sql(f"""
     SELECT COUNT(*)
     FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts t
     LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
-        ON g.source_type = 'earnings_transcript'
-        AND g.source_id  = CONCAT(t.symbol, '|', CAST(t.year AS STRING), '|', CAST(t.quarter AS STRING))
+        ON g.signal_id = md5(CONCAT(t.symbol, '|', CAST(t.year AS STRING), '|', CAST(t.quarter AS STRING)))
     WHERE t.content IS NOT NULL
       AND LENGTH(TRIM(t.content)) > 200
 """).collect()[0][0]
@@ -102,8 +100,7 @@ else:
                 SELECT t.symbol, t.year, t.quarter, t.date, t.title, t.content
                 FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts t
                 LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
-                    ON g.source_type = 'earnings_transcript'
-                    AND g.source_id  = CONCAT(t.symbol, '|', CAST(t.year AS STRING), '|', CAST(t.quarter AS STRING))
+                    ON g.signal_id = md5(CONCAT(t.symbol, '|', CAST(t.year AS STRING), '|', CAST(t.quarter AS STRING)))
                 WHERE t.content IS NOT NULL
                   AND LENGTH(TRIM(t.content)) > 200
                 {_limit_clause}
@@ -174,7 +171,6 @@ else:
                 symbol,
                 TRY_CAST(date AS DATE)                               AS signal_date,
                 'earnings_transcript'                                AS source_type,
-                CONCAT(symbol, '|', CAST(year AS STRING), '|', CAST(quarter AS STRING)) AS source_id,
                 COALESCE(title, CONCAT(symbol, ' Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' Earnings Call')) AS source_description,
                 INITCAP(COALESCE(sentiment_raw, 'neutral'))          AS sentiment,
                 CASE severity_raw:response[0]::STRING
@@ -190,6 +186,8 @@ else:
                      ELSE false
                 END                                                  AS advisor_action_needed,
                 COALESCE(signal_type_raw:response[0]::STRING, 'Earnings') AS signal_type,
+                CONCAT('Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' Earnings Call') AS signal,
+                severity_raw:response[0]::STRING                     AS signal_value,
                 rationale,
                 CURRENT_TIMESTAMP()                                  AS processed_at
             FROM signals
@@ -201,15 +199,17 @@ else:
             tgt.severity_score        = src.severity_score,
             tgt.advisor_action_needed = src.advisor_action_needed,
             tgt.signal_type           = src.signal_type,
+            tgt.signal                = src.signal,
+            tgt.signal_value          = src.signal_value,
             tgt.rationale             = src.rationale,
             tgt.processed_at          = src.processed_at
         WHEN NOT MATCHED THEN INSERT (
-            signal_id, symbol, signal_date, source_type, source_id, source_description,
-            sentiment, severity_score, advisor_action_needed, signal_type, rationale, processed_at
+            signal_id, symbol, signal_date, source_type, source_description,
+            sentiment, severity_score, advisor_action_needed, signal_type, signal, signal_value, rationale, processed_at
         ) VALUES (
-            src.signal_id, src.symbol, src.signal_date, src.source_type, src.source_id,
+            src.signal_id, src.symbol, src.signal_date, src.source_type,
             src.source_description, src.sentiment, src.severity_score, src.advisor_action_needed,
-            src.signal_type, src.rationale, src.processed_at
+            src.signal_type, src.signal, src.signal_value, src.rationale, src.processed_at
         )
     """)
     print(f"Merged {new_count} earnings transcript signals into gold_unified_signals.")
