@@ -18,9 +18,12 @@
 # T1/T2/T3 signals.  Each row is independently dated (quarterly for T2 NAV, annual FY
 # for the rest) so signal_date reflects the true data vintage of each measurement.
 #
-# Because source_id encodes the metric key ({symbol}|bdc|{metric_key}), the original
-# T1/T2/T3 dashboard layout can be rebuilt with a plain GROUP BY + CASE pivot:
+# Column layout:
+#   signal_type  = 'Private Credit Health'  (category, consistent across all BDC rows)
+#   signal       = XBRL/GAAP concept name   (granular measure driving this metric)
+#   source_id    = '{symbol}|bdc|{metric_key}'  (pivot key for dashboard rebuilds)
 #
+# The dashboard pivot query on gold_unified_signals:
 #   SELECT symbol,
 #     MAX(CASE WHEN source_id LIKE '%t1_pik_nii'     THEN source_description END) AS t1_pik,
 #     MAX(CASE WHEN source_id LIKE '%t1_div_coverage' THEN source_description END) AS t1_div,
@@ -28,6 +31,9 @@
 #   FROM gold_unified_signals
 #   WHERE source_type = 'bdc_early_warning'
 #   GROUP BY symbol
+#
+# This view is materialised as gold_bdc_early_warnings (CREATE OR REPLACE VIEW) with
+# stoplight emojis replacing the raw signal-level text.
 #
 # Idempotency: MERGE on signal_id = md5(symbol|bdc|metric_key|signal_date).
 # A new FY/quarterly period produces a new row; re-runs on unchanged data update in place.
@@ -45,7 +51,7 @@ LLM_ENDPOINT = "databricks-claude-sonnet-4-6"
 # COMMAND ----------
 
 # # Uncomment to reset BDC signals only
-#spark.sql(f"DELETE FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals WHERE source_type = 'bdc_early_warning'")
+# spark.sql(f"DELETE FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals WHERE source_type = 'bdc_early_warning'")
 
 # COMMAND ----------
 
@@ -61,12 +67,19 @@ spark.sql(f"""
         severity_score        DOUBLE,
         advisor_action_needed BOOLEAN,
         signal_type           STRING,
+        signal                STRING,
         rationale             STRING,
         processed_at          TIMESTAMP
     )
     USING DELTA
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 """)
+
+try:
+    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals ADD COLUMN signal STRING")
+    print("Added signal column to gold_unified_signals.")
+except Exception:
+    pass  # column already exists
 
 # COMMAND ----------
 
@@ -81,10 +94,11 @@ if _ts_count == 0 or _fy_count == 0:
 
 # COMMAND ----------
 
-# One row per (symbol, metric_key, signal_date) written to gold_unified_signals.
-# source_id = "{symbol}|bdc|{metric_key}" — enables GROUP BY + CASE pivot to
-# reconstruct the T1/T2/T3 dashboard layout from a single table scan.
-# source_description carries the formatted value + signal level for display.
+# One row per (symbol, metric_key, signal_date) merged into gold_unified_signals.
+#   signal_type  = 'Private Credit Health'  (the category)
+#   signal       = XBRL/GAAP concept name   (the granular measure)
+#   source_id    = '{ticker}|bdc|{metric_key}'  (pivot key)
+#   source_description = formatted value + signal level + SEC filing provenance
 
 spark.sql(f"""
     MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals AS tgt
@@ -117,6 +131,24 @@ spark.sql(f"""
             FROM {UC_CATALOG}.{UC_SCHEMA}.bdc_time_series
             WHERE metric = 'gl_ps' AND fiscal_period = 'FY'
             GROUP BY ticker
+        ),
+
+        -- ── Most recent 10-K or 10-Q per ticker from the SEC filings log ─────────
+        -- 10-K preferred (more complete); falls back to 10-Q when no 10-K is present.
+        sec_source AS (
+            SELECT symbol, form_type, accession, CAST(filing_date AS DATE) AS filing_date
+            FROM (
+                SELECT symbol, form_type, accession, filing_date,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY symbol
+                           ORDER BY
+                               CASE form_type WHEN '10-K' THEN 0 ELSE 1 END,
+                               filing_date DESC
+                       ) AS rn
+                FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filings_log
+                WHERE form_type IN ('10-K', '10-Q')
+                  AND accession != 'NOACC'
+            ) WHERE rn = 1
         ),
 
         -- ── T1: PIK-to-NII ratio ───────────────────────────────────────────────
@@ -220,49 +252,75 @@ spark.sql(f"""
         ),
 
         -- ── UNION: one row per metric per company ──────────────────────────────
+        -- signal_type (XBRL concept) carries the granular measure name per metric.
+        -- filing_form/filing_date/filing_accession come from sec_source for provenance.
         all_metrics AS (
             SELECT ticker, 't1_pik_nii'      AS metric_key, 'T1 PIK/NII'         AS metric_name,
                    metric_value, '%'          AS unit, signal_level,
-                   COALESCE(fd.signal_date, CURRENT_DATE()) AS signal_date
-            FROM t1_pik LEFT JOIN fy_dates fd USING (ticker)
+                   COALESCE(fd.signal_date, CURRENT_DATE())              AS signal_date,
+                   'Paid-in-kind interest income'                        AS xbrl_concept,
+                   sf.form_type AS filing_form, sf.filing_date AS filing_date, sf.accession AS filing_accession
+            FROM t1_pik
+            LEFT JOIN fy_dates fd  USING (ticker)
+            LEFT JOIN sec_source sf ON t1_pik.ticker = sf.symbol
 
             UNION ALL
 
             SELECT ticker, 't1_div_coverage', 'T1 Div Coverage',
                    metric_value, '%', signal_level,
-                   COALESCE(fd.signal_date, CURRENT_DATE())
-            FROM t1_div LEFT JOIN fy_dates fd USING (ticker)
+                   COALESCE(fd.signal_date, CURRENT_DATE()),
+                   'Net investment income per share',
+                   sf.form_type, sf.filing_date, sf.accession
+            FROM t1_div
+            LEFT JOIN fy_dates fd  USING (ticker)
+            LEFT JOIN sec_source sf ON t1_div.ticker = sf.symbol
 
             UNION ALL
 
             SELECT ticker, 't2_nav_trend', 'T2 NAV Trend',
                    metric_value, ' qtrs', signal_level,
-                   COALESCE(nd.signal_date, CURRENT_DATE())
-            FROM t2_nav LEFT JOIN nav_dates nd USING (ticker)
+                   COALESCE(nd.signal_date, CURRENT_DATE()),
+                   'Net asset value per share',
+                   sf.form_type, sf.filing_date, sf.accession
+            FROM t2_nav
+            LEFT JOIN nav_dates nd USING (ticker)
+            LEFT JOIN sec_source sf ON t2_nav.ticker = sf.symbol
 
             UNION ALL
 
             SELECT ticker, 't2_deprec_nav', 'T2 Deprec/NAV',
                    metric_value, '%', signal_level,
-                   COALESCE(fd.signal_date, CURRENT_DATE())
-            FROM t2_dep LEFT JOIN fy_dates fd USING (ticker)
+                   COALESCE(fd.signal_date, CURRENT_DATE()),
+                   'Gross unrealized depreciation on investments (tax basis)',
+                   sf.form_type, sf.filing_date, sf.accession
+            FROM t2_dep
+            LEFT JOIN fy_dates fd  USING (ticker)
+            LEFT JOIN sec_source sf ON t2_dep.ticker = sf.symbol
 
             UNION ALL
 
             SELECT ticker, 't3_rl_accel', 'T3 RL Acceleration',
                    metric_value, 'x', signal_level,
-                   COALESCE(rd.signal_date, CURRENT_DATE())
-            FROM t3_rl LEFT JOIN rl_dates rd USING (ticker)
+                   COALESCE(rd.signal_date, CURRENT_DATE()),
+                   'Realized gains (losses) on investments',
+                   sf.form_type, sf.filing_date, sf.accession
+            FROM t3_rl
+            LEFT JOIN rl_dates rd  USING (ticker)
+            LEFT JOIN sec_source sf ON t3_rl.ticker = sf.symbol
 
             UNION ALL
 
             SELECT ticker, 't3_cum_loss', 'T3 Cum Loss/NAV',
                    metric_value, '%', signal_level,
-                   COALESCE(gd.signal_date, CURRENT_DATE())
-            FROM t3_cum LEFT JOIN gl_dates gd USING (ticker)
+                   COALESCE(gd.signal_date, CURRENT_DATE()),
+                   'Gain (loss) on investments per share',
+                   sf.form_type, sf.filing_date, sf.accession
+            FROM t3_cum
+            LEFT JOIN gl_dates gd  USING (ticker)
+            LEFT JOIN sec_source sf ON t3_cum.ticker = sf.symbol
         ),
 
-        -- ── Enrich with AI rationale ───────────────────────────────────────────
+        -- ── AI rationale per metric ────────────────────────────────────────────
         enriched AS (
             SELECT *,
                 TRIM(ai_query(
@@ -271,9 +329,12 @@ spark.sql(f"""
                         'In 1-2 sentences, explain the investment significance of this BDC metric ',
                         'for a Goldman Sachs UHNW wealth advisor. Be specific and direct.\\n',
                         'Company: ', ticker,
-                        ' | Metric: ', metric_name,
+                        ' | Metric: ', metric_name, ' (', xbrl_concept, ')',
                         ' | Value: ', CAST(metric_value AS STRING), unit,
-                        ' | Signal level: ', signal_level
+                        ' | Signal level: ', signal_level,
+                        CASE WHEN filing_form IS NOT NULL
+                             THEN CONCAT(' | Source: ', filing_form, ' filed ', CAST(filing_date AS STRING))
+                             ELSE '' END
                     )
                 )) AS rationale
             FROM all_metrics
@@ -285,9 +346,13 @@ spark.sql(f"""
             signal_date,
             'bdc_early_warning'                                       AS source_type,
             CONCAT(ticker, '|bdc|', metric_key)                       AS source_id,
-            CONCAT(metric_name, ': ',
-                   CAST(metric_value AS STRING), unit,
-                   ' (', signal_level, ')')                           AS source_description,
+            CONCAT(
+                metric_name, ': ', CAST(metric_value AS STRING), unit, ' (', signal_level, ')',
+                CASE WHEN filing_form IS NOT NULL
+                     THEN CONCAT(' — ', filing_form, ' ', CAST(filing_date AS STRING),
+                                 ' (', filing_accession, ')')
+                     ELSE '' END
+            )                                                         AS source_description,
             CASE signal_level
                 WHEN 'CONCERN' THEN 'Negative'
                 WHEN 'WATCH'   THEN 'Mixed'
@@ -299,7 +364,8 @@ spark.sql(f"""
                 ELSE                0.15
             END                                                       AS severity_score,
             signal_level = 'CONCERN'                                  AS advisor_action_needed,
-            'Credit Event'                                            AS signal_type,
+            'Private Credit Health'                                   AS signal_type,
+            xbrl_concept                                              AS signal,
             rationale,
             CURRENT_TIMESTAMP()                                       AS processed_at
         FROM enriched
@@ -311,15 +377,17 @@ spark.sql(f"""
         tgt.sentiment             = src.sentiment,
         tgt.severity_score        = src.severity_score,
         tgt.advisor_action_needed = src.advisor_action_needed,
+        tgt.signal_type           = src.signal_type,
+        tgt.signal                = src.signal,
         tgt.rationale             = src.rationale,
         tgt.processed_at          = src.processed_at
     WHEN NOT MATCHED THEN INSERT (
         signal_id, symbol, signal_date, source_type, source_id, source_description,
-        sentiment, severity_score, advisor_action_needed, signal_type, rationale, processed_at
+        sentiment, severity_score, advisor_action_needed, signal_type, signal, rationale, processed_at
     ) VALUES (
         src.signal_id, src.symbol, src.signal_date, src.source_type, src.source_id,
         src.source_description, src.sentiment, src.severity_score, src.advisor_action_needed,
-        src.signal_type, src.rationale, src.processed_at
+        src.signal_type, src.signal, src.rationale, src.processed_at
     )
 """)
 
@@ -329,7 +397,7 @@ print("BDC signals merged into gold_unified_signals.")
 
 display(
     spark.sql(f"""
-        SELECT symbol, signal_date, source_id, source_description,
+        SELECT symbol, signal_date, source_id, source_description, signal,
                sentiment, severity_score, advisor_action_needed,
                LEFT(rationale, 150) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
@@ -340,24 +408,47 @@ display(
 
 # COMMAND ----------
 
-# Dashboard rebuild — pivot gold_unified_signals back to the T1/T2/T3 column layout.
-# source_id encodes the metric key so a GROUP BY + CASE reconstructs the exact
-# view produced by bdc_early_warning_sql.py with no additional CTEs.
+# ── BDC early warning dashboard view ─────────────────────────────────────────
+# Pivots gold_unified_signals back to the T1/T2/T3 column layout.
+# Stoplight emojis replace the raw signal-level text so the table reads at a
+# glance, matching the pattern used in bdc_early_warning_sql.py.
 
-display(spark.sql(f"""
+spark.sql(f"""
+    CREATE OR REPLACE VIEW {UC_CATALOG}.{UC_SCHEMA}.gold_bdc_early_warnings AS
+    WITH flagged AS (
+        SELECT
+            symbol,
+            signal_date,
+            source_id,
+            -- Swap (CONCERN)/(WATCH)/(OK) for stoplight emojis
+            REGEXP_REPLACE(
+                REGEXP_REPLACE(
+                    REGEXP_REPLACE(source_description, '\\\\(CONCERN\\\\)', '🔴'),
+                    '\\\\(WATCH\\\\)', '🟡'
+                ),
+                '\\\\(OK\\\\)', '🟢'
+            ) AS display_value,
+            severity_score,
+            advisor_action_needed
+        FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
+        WHERE source_type = 'bdc_early_warning'
+    )
     SELECT
         symbol,
-        MAX(signal_date)                                                                   AS signal_date,
-        MAX(CASE WHEN source_id LIKE '%t1_pik_nii'      THEN source_description END)      AS t1_pik_nii,
-        MAX(CASE WHEN source_id LIKE '%t1_div_coverage'  THEN source_description END)     AS t1_div_coverage,
-        MAX(CASE WHEN source_id LIKE '%t2_nav_trend'    THEN source_description END)      AS t2_nav_trend,
-        MAX(CASE WHEN source_id LIKE '%t2_deprec_nav'   THEN source_description END)      AS t2_deprec_nav,
-        MAX(CASE WHEN source_id LIKE '%t3_rl_accel'     THEN source_description END)      AS t3_rl_accel,
-        MAX(CASE WHEN source_id LIKE '%t3_cum_loss'     THEN source_description END)      AS t3_cum_loss,
-        MAX(severity_score)                                                                AS worst_severity,
-        SUM(CASE WHEN sentiment = 'Negative' THEN 1 ELSE 0 END)                          AS concern_count
-    FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
-    WHERE source_type = 'bdc_early_warning'
+        MAX(signal_date)                                                              AS signal_date,
+        COALESCE(MAX(CASE WHEN source_id LIKE '%t1_pik_nii'      THEN display_value END), '⚪ N/A') AS `T1 PIK/NII`,
+        COALESCE(MAX(CASE WHEN source_id LIKE '%t1_div_coverage'  THEN display_value END), '⚪ N/A') AS `T1 Div Coverage`,
+        COALESCE(MAX(CASE WHEN source_id LIKE '%t2_nav_trend'    THEN display_value END), '⚪ N/A') AS `T2 NAV Trend`,
+        COALESCE(MAX(CASE WHEN source_id LIKE '%t2_deprec_nav'   THEN display_value END), '⚪ N/A') AS `T2 Deprec/NAV`,
+        COALESCE(MAX(CASE WHEN source_id LIKE '%t3_rl_accel'     THEN display_value END), '⚪ N/A') AS `T3 RL Acceleration`,
+        COALESCE(MAX(CASE WHEN source_id LIKE '%t3_cum_loss'     THEN display_value END), '⚪ N/A') AS `T3 Cum Loss/NAV`,
+        MAX(severity_score)                                                           AS worst_severity,
+        SUM(CASE WHEN advisor_action_needed THEN 1 ELSE 0 END)                       AS concern_count
+    FROM flagged
     GROUP BY symbol
     ORDER BY worst_severity DESC, concern_count DESC
-"""))
+""")
+
+display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.gold_bdc_early_warnings"))
+
+# COMMAND ----------
