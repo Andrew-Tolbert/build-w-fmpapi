@@ -3,7 +3,7 @@
 # [tool.databricks.environment]
 # environment_version = "5"
 # dependencies = [
-#   "-r /Workspace/Users/andrew.tolbert@databricks.com/build-w-fmpapi/requirements.txt",
+#   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
 # ]
 # ///
 # Pull recent stock news for all watchlist tickers.
@@ -168,4 +168,9 @@ display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.stock_news_log"))
 
 # COMMAND ----------
 
-# spark.sql(f"DROP TABLE {UC_CATALOG}.{UC_SCHEMA}.stock_news_log")
+display(spark.sql(f"""
+                    SELECT * FROM {UC_CATALOG}.{UC_SCHEMA}.stock_news_log
+                    where downloaded_at >= current_timestamp() - INTERVAL 1 DAY
+                    """
+))
+
