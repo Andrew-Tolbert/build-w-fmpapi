@@ -258,7 +258,7 @@ spark.sql(f"""
             SELECT ticker, 't1_pik_nii'      AS metric_key, 'T1 PIK/NII'         AS metric_name,
                    metric_value, '%'          AS unit, signal_level,
                    COALESCE(fd.signal_date, CURRENT_DATE())              AS signal_date,
-                   'Paid-in-kind interest income'                        AS xbrl_concept,
+                   'PIK-to-NII Ratio'                                    AS xbrl_concept,
                    sf.form_type AS filing_form, sf.filing_date AS filing_date, sf.accession AS filing_accession
             FROM t1_pik
             LEFT JOIN fy_dates fd  USING (ticker)
@@ -269,7 +269,7 @@ spark.sql(f"""
             SELECT ticker, 't1_div_coverage', 'T1 Div Coverage',
                    metric_value, '%', signal_level,
                    COALESCE(fd.signal_date, CURRENT_DATE()),
-                   'Net investment income per share',
+                   'Dividend Coverage Ratio',
                    sf.form_type, sf.filing_date, sf.accession
             FROM t1_div
             LEFT JOIN fy_dates fd  USING (ticker)
@@ -280,7 +280,7 @@ spark.sql(f"""
             SELECT ticker, 't2_nav_trend', 'T2 NAV Trend',
                    metric_value, ' qtrs', signal_level,
                    COALESCE(nd.signal_date, CURRENT_DATE()),
-                   'Net asset value per share',
+                   'NAV Trajectory',
                    sf.form_type, sf.filing_date, sf.accession
             FROM t2_nav
             LEFT JOIN nav_dates nd USING (ticker)
@@ -291,7 +291,7 @@ spark.sql(f"""
             SELECT ticker, 't2_deprec_nav', 'T2 Deprec/NAV',
                    metric_value, '%', signal_level,
                    COALESCE(fd.signal_date, CURRENT_DATE()),
-                   'Gross unrealized depreciation on investments (tax basis)',
+                   'Unrealized Depreciation / Net Assets',
                    sf.form_type, sf.filing_date, sf.accession
             FROM t2_dep
             LEFT JOIN fy_dates fd  USING (ticker)
@@ -302,7 +302,7 @@ spark.sql(f"""
             SELECT ticker, 't3_rl_accel', 'T3 RL Acceleration',
                    metric_value, 'x', signal_level,
                    COALESCE(rd.signal_date, CURRENT_DATE()),
-                   'Realized gains (losses) on investments',
+                   'Realized Loss Acceleration',
                    sf.form_type, sf.filing_date, sf.accession
             FROM t3_rl
             LEFT JOIN rl_dates rd  USING (ticker)
@@ -313,7 +313,7 @@ spark.sql(f"""
             SELECT ticker, 't3_cum_loss', 'T3 Cum Loss/NAV',
                    metric_value, '%', signal_level,
                    COALESCE(gd.signal_date, CURRENT_DATE()),
-                   'Gain (loss) on investments per share',
+                   'Cumulative Losses vs. NAV',
                    sf.form_type, sf.filing_date, sf.accession
             FROM t3_cum
             LEFT JOIN gl_dates gd  USING (ticker)
@@ -349,8 +349,7 @@ spark.sql(f"""
             CONCAT(
                 metric_name, ': ', CAST(metric_value AS STRING), unit, ' (', signal_level, ')',
                 CASE WHEN filing_form IS NOT NULL
-                     THEN CONCAT(' — ', filing_form, ' ', CAST(filing_date AS STRING),
-                                 ' (', filing_accession, ')')
+                     THEN CONCAT(' — ', filing_form, ' Q', QUARTER(filing_date), ' ', YEAR(filing_date))
                      ELSE '' END
             )                                                         AS source_description,
             CASE signal_level
@@ -382,10 +381,10 @@ spark.sql(f"""
         tgt.rationale             = src.rationale,
         tgt.processed_at          = src.processed_at
     WHEN NOT MATCHED THEN INSERT (
-        signal_id, symbol, signal_date, source_type, source_id, source_description,
+        signal_id, symbol, signal_date, source_type, source_description,
         sentiment, severity_score, advisor_action_needed, signal_type, signal, rationale, processed_at
     ) VALUES (
-        src.signal_id, src.symbol, src.signal_date, src.source_type, src.source_id,
+        src.signal_id, src.symbol, src.signal_date, src.source_type,
         src.source_description, src.sentiment, src.severity_score, src.advisor_action_needed,
         src.signal_type, src.signal, src.rationale, src.processed_at
     )
@@ -419,7 +418,7 @@ spark.sql(f"""
         SELECT
             symbol,
             signal_date,
-            source_id,
+            source_description,
             -- Swap (CONCERN)/(WATCH)/(OK) for stoplight emojis
             REGEXP_REPLACE(
                 REGEXP_REPLACE(
@@ -435,15 +434,15 @@ spark.sql(f"""
     )
     SELECT
         symbol,
-        MAX(signal_date)                                                              AS signal_date,
-        COALESCE(MAX(CASE WHEN source_id LIKE '%t1_pik_nii'      THEN display_value END), '⚪ N/A') AS `T1 PIK/NII`,
-        COALESCE(MAX(CASE WHEN source_id LIKE '%t1_div_coverage'  THEN display_value END), '⚪ N/A') AS `T1 Div Coverage`,
-        COALESCE(MAX(CASE WHEN source_id LIKE '%t2_nav_trend'    THEN display_value END), '⚪ N/A') AS `T2 NAV Trend`,
-        COALESCE(MAX(CASE WHEN source_id LIKE '%t2_deprec_nav'   THEN display_value END), '⚪ N/A') AS `T2 Deprec/NAV`,
-        COALESCE(MAX(CASE WHEN source_id LIKE '%t3_rl_accel'     THEN display_value END), '⚪ N/A') AS `T3 RL Acceleration`,
-        COALESCE(MAX(CASE WHEN source_id LIKE '%t3_cum_loss'     THEN display_value END), '⚪ N/A') AS `T3 Cum Loss/NAV`,
-        MAX(severity_score)                                                           AS worst_severity,
-        SUM(CASE WHEN advisor_action_needed THEN 1 ELSE 0 END)                       AS concern_count
+        MAX(signal_date)                                                                          AS signal_date,
+        COALESCE(MAX(CASE WHEN source_description LIKE 'T1 PIK/NII:%'         THEN display_value END), '⚪ N/A') AS `T1 PIK/NII`,
+        COALESCE(MAX(CASE WHEN source_description LIKE 'T1 Div Coverage:%'    THEN display_value END), '⚪ N/A') AS `T1 Div Coverage`,
+        COALESCE(MAX(CASE WHEN source_description LIKE 'T2 NAV Trend:%'       THEN display_value END), '⚪ N/A') AS `T2 NAV Trend`,
+        COALESCE(MAX(CASE WHEN source_description LIKE 'T2 Deprec/NAV:%'     THEN display_value END), '⚪ N/A') AS `T2 Deprec/NAV`,
+        COALESCE(MAX(CASE WHEN source_description LIKE 'T3 RL Acceleration:%' THEN display_value END), '⚪ N/A') AS `T3 RL Acceleration`,
+        COALESCE(MAX(CASE WHEN source_description LIKE 'T3 Cum Loss/NAV:%'   THEN display_value END), '⚪ N/A') AS `T3 Cum Loss/NAV`,
+        MAX(severity_score)                                                                       AS worst_severity,
+        SUM(CASE WHEN advisor_action_needed THEN 1 ELSE 0 END)                                   AS concern_count
     FROM flagged
     GROUP BY symbol
     ORDER BY worst_severity DESC, concern_count DESC
