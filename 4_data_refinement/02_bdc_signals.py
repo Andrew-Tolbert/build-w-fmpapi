@@ -75,12 +75,6 @@ spark.sql(f"""
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 """)
 
-try:
-    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals ADD COLUMN signal STRING")
-    print("Added signal column to gold_unified_signals.")
-except Exception:
-    pass  # column already exists
-
 # COMMAND ----------
 
 _ts_count = spark.sql(f"SELECT COUNT(*) FROM {UC_CATALOG}.{UC_SCHEMA}.bdc_time_series").collect()[0][0]
@@ -446,5 +440,3 @@ spark.sql(f"""
 """)
 
 display(spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.gold_bdc_early_warnings"))
-
-# COMMAND ----------
