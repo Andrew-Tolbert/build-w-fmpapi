@@ -138,47 +138,6 @@ print(f"bronze_transcripts row count: {spark.table(f'{UC_CATALOG}.{UC_SCHEMA}.br
 
 # COMMAND ----------
 
-# ── Patch: backfill company_name and null titles ──────────────────────────────
-# Runs every time but only touches rows that need fixing.
-# company_name is not in the source JSON so Autoloader leaves it null — fill it
-# from bronze_company_profiles (which has the canonical company name per ticker).
-# title is null for transcripts fetched before the pull notebook was fixed — derive
-# it as "{company_name} Q{quarter} {year} Earnings Call".
-
-spark.sql(f"""
-    MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts AS tgt
-    USING (
-        SELECT t.symbol, t.year, t.quarter, cp.companyName AS company_name
-        FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts t
-        JOIN {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles cp
-            ON t.symbol = cp.symbol
-        WHERE t.company_name IS NULL
-    ) AS src
-    ON  tgt.symbol  = src.symbol
-    AND tgt.year    = src.year
-    AND tgt.quarter = src.quarter
-    WHEN MATCHED THEN UPDATE SET tgt.company_name = src.company_name
-""")
-
-spark.sql(f"""
-    UPDATE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts
-    SET title = CONCAT(
-        COALESCE(company_name, symbol),
-        ' Q', CAST(quarter AS STRING),
-        ' ', CAST(year AS STRING),
-        ' Earnings Call'
-    )
-    WHERE title IS NULL OR TRIM(title) = ''
-""")
-
-_null_after = spark.sql(f"""
-    SELECT COUNT(*) FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts
-    WHERE title IS NULL
-""").collect()[0][0]
-print(f"Null titles remaining after patch: {_null_after}")
-
-# COMMAND ----------
-
 # ── Stage 2 work list — transcripts not yet chunked ───────────────────────────
 
 already_parsed = spark.sql(f"""
@@ -341,34 +300,6 @@ try:
     print("bronze_transcript_chunks updated.")
 except Exception as e:
     print(f"WARNING: bronze_transcript_chunks merge skipped — {e}")
-
-# COMMAND ----------
-
-# ── Patch: backfill title and company_name in bronze_transcript_chunks ─────────
-# Existing chunks written before these columns existed will have nulls.
-# Join back to bronze_transcripts (already patched above) to fill them in.
-
-spark.sql(f"""
-    MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks AS tgt
-    USING (
-        SELECT DISTINCT symbol, year, quarter, title, company_name
-        FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts
-        WHERE title IS NOT NULL OR company_name IS NOT NULL
-    ) AS src
-    ON  tgt.symbol  = src.symbol
-    AND tgt.year    = src.year
-    AND tgt.quarter = src.quarter
-    AND (tgt.title IS NULL OR tgt.company_name IS NULL)
-    WHEN MATCHED THEN UPDATE SET
-        tgt.title        = src.title,
-        tgt.company_name = src.company_name
-""")
-
-_chunk_nulls = spark.sql(f"""
-    SELECT COUNT(*) FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks
-    WHERE title IS NULL OR company_name IS NULL
-""").collect()[0][0]
-print(f"Chunks still missing title or company_name: {_chunk_nulls}")
 
 # COMMAND ----------
 

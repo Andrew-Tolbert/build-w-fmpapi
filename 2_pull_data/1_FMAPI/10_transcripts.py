@@ -31,6 +31,17 @@ client = FMPClient(api_key=FMP_API_KEY)
 
 apply_full_refresh("transcripts")
 
+# Build company-name lookup once — used to populate company_name in each payload.
+# bronze_company_profiles is the canonical source; fall back to the ticker if missing.
+_company_name_map = {
+    row["symbol"]: row["companyName"]
+    for row in spark.sql(f"""
+        SELECT symbol, companyName
+        FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles
+        WHERE companyName IS NOT NULL
+    """).collect()
+}
+
 # COMMAND ----------
 
 # Fetch last 4 quarters for each BDC ticker (2 years of transcripts)
@@ -80,16 +91,16 @@ for ticker in get_tickers():
             if not record or not record.get("content"):
                 continue
 
+            company_name = _company_name_map.get(ticker, ticker)
             payload = {
-                "symbol":  ticker,
-                "year":    year,
-                "quarter": quarter,
-                "date":    record.get("date"),
+                "symbol":       ticker,
+                "year":         year,
+                "quarter":      quarter,
+                "date":         record.get("date"),
+                "company_name": company_name,
                 # FMP's earning-call-transcript endpoint does not return a title field.
-                # Fall back to a deterministic constructed title so bronze_transcripts
-                # is never left with a null title column.
-                "title":   record.get("title") or f"{ticker} Q{quarter} {year} Earnings Call",
-                "content": record.get("content", ""),
+                "title":        record.get("title") or f"{company_name} Q{quarter} {year} Earnings Call",
+                "content":      record.get("content", ""),
             }
 
             filename = f"Q{quarter}_{year}.json"
