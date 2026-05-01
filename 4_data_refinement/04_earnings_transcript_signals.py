@@ -63,6 +63,7 @@ spark.sql(f"""
         severity_score        DOUBLE,
         advisor_action_needed BOOLEAN,
         signal_type           STRING,
+        signal                STRING,
         rationale             STRING,
         processed_at          TIMESTAMP
     )
