@@ -61,13 +61,13 @@ spark.sql(f"""
         symbol                STRING,
         signal_date           DATE,
         source_type           STRING,
-        source_id             STRING,
         source_description    STRING,
         sentiment             STRING,
         severity_score        DOUBLE,
         advisor_action_needed BOOLEAN,
         signal_type           STRING,
         signal                STRING,
+        signal_value          STRING,
         rationale             STRING,
         processed_at          TIMESTAMP
     )
@@ -345,13 +345,10 @@ spark.sql(f"""
             ticker                                                    AS symbol,
             signal_date,
             'bdc_early_warning'                                       AS source_type,
-            CONCAT(ticker, '|bdc|', metric_key)                       AS source_id,
-            CONCAT(
-                metric_name, ': ', CAST(metric_value AS STRING), unit, ' (', signal_level, ')',
-                CASE WHEN filing_form IS NOT NULL
-                     THEN CONCAT(' — ', filing_form, ' Q', QUARTER(filing_date), ' ', YEAR(filing_date))
-                     ELSE '' END
-            )                                                         AS source_description,
+            CASE WHEN filing_form IS NOT NULL
+                 THEN CONCAT(filing_form, ' Q', QUARTER(filing_date), ' ', YEAR(filing_date))
+                 ELSE NULL
+            END                                                       AS source_description,
             CASE signal_level
                 WHEN 'CONCERN' THEN 'Negative'
                 WHEN 'WATCH'   THEN 'Mixed'
@@ -365,6 +362,7 @@ spark.sql(f"""
             signal_level = 'CONCERN'                                  AS advisor_action_needed,
             'Private Credit Health'                                   AS signal_type,
             xbrl_concept                                              AS signal,
+            CONCAT(CAST(metric_value AS STRING), unit, ' (', signal_level, ')') AS signal_value,
             rationale,
             CURRENT_TIMESTAMP()                                       AS processed_at
         FROM enriched
@@ -378,15 +376,16 @@ spark.sql(f"""
         tgt.advisor_action_needed = src.advisor_action_needed,
         tgt.signal_type           = src.signal_type,
         tgt.signal                = src.signal,
+        tgt.signal_value          = src.signal_value,
         tgt.rationale             = src.rationale,
         tgt.processed_at          = src.processed_at
     WHEN NOT MATCHED THEN INSERT (
         signal_id, symbol, signal_date, source_type, source_description,
-        sentiment, severity_score, advisor_action_needed, signal_type, signal, rationale, processed_at
+        sentiment, severity_score, advisor_action_needed, signal_type, signal, signal_value, rationale, processed_at
     ) VALUES (
         src.signal_id, src.symbol, src.signal_date, src.source_type,
         src.source_description, src.sentiment, src.severity_score, src.advisor_action_needed,
-        src.signal_type, src.signal, src.rationale, src.processed_at
+        src.signal_type, src.signal, src.signal_value, src.rationale, src.processed_at
     )
 """)
 
@@ -396,12 +395,12 @@ print("BDC signals merged into gold_unified_signals.")
 
 display(
     spark.sql(f"""
-        SELECT symbol, signal_date, source_id, source_description, signal,
+        SELECT symbol, signal_date, source_description, signal, signal_value,
                sentiment, severity_score, advisor_action_needed,
                LEFT(rationale, 150) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
         WHERE source_type = 'bdc_early_warning'
-        ORDER BY symbol, source_id
+        ORDER BY symbol, signal
     """)
 )
 
@@ -418,15 +417,13 @@ spark.sql(f"""
         SELECT
             symbol,
             signal_date,
-            source_description,
-            -- Swap (CONCERN)/(WATCH)/(OK) for stoplight emojis
-            REGEXP_REPLACE(
-                REGEXP_REPLACE(
-                    REGEXP_REPLACE(source_description, '\\\\(CONCERN\\\\)', '🔴'),
-                    '\\\\(WATCH\\\\)', '🟡'
-                ),
-                '\\\\(OK\\\\)', '🟢'
-            ) AS display_value,
+            signal,
+            -- Prepend stoplight emoji based on signal_value suffix
+            CASE
+                WHEN signal_value LIKE '%(CONCERN)' THEN CONCAT('🔴 ', signal_value)
+                WHEN signal_value LIKE '%(WATCH)'   THEN CONCAT('🟡 ', signal_value)
+                ELSE                                     CONCAT('🟢 ', signal_value)
+            END AS display_value,
             severity_score,
             advisor_action_needed
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
@@ -434,15 +431,15 @@ spark.sql(f"""
     )
     SELECT
         symbol,
-        MAX(signal_date)                                                                          AS signal_date,
-        COALESCE(MAX(CASE WHEN source_description LIKE 'T1 PIK/NII:%'         THEN display_value END), '⚪ N/A') AS `T1 PIK/NII`,
-        COALESCE(MAX(CASE WHEN source_description LIKE 'T1 Div Coverage:%'    THEN display_value END), '⚪ N/A') AS `T1 Div Coverage`,
-        COALESCE(MAX(CASE WHEN source_description LIKE 'T2 NAV Trend:%'       THEN display_value END), '⚪ N/A') AS `T2 NAV Trend`,
-        COALESCE(MAX(CASE WHEN source_description LIKE 'T2 Deprec/NAV:%'     THEN display_value END), '⚪ N/A') AS `T2 Deprec/NAV`,
-        COALESCE(MAX(CASE WHEN source_description LIKE 'T3 RL Acceleration:%' THEN display_value END), '⚪ N/A') AS `T3 RL Acceleration`,
-        COALESCE(MAX(CASE WHEN source_description LIKE 'T3 Cum Loss/NAV:%'   THEN display_value END), '⚪ N/A') AS `T3 Cum Loss/NAV`,
-        MAX(severity_score)                                                                       AS worst_severity,
-        SUM(CASE WHEN advisor_action_needed THEN 1 ELSE 0 END)                                   AS concern_count
+        MAX(signal_date)                                                                                        AS signal_date,
+        COALESCE(MAX(CASE WHEN signal = 'PIK-to-NII Ratio'                   THEN display_value END), '⚪ N/A') AS `T1 PIK/NII`,
+        COALESCE(MAX(CASE WHEN signal = 'Dividend Coverage Ratio'            THEN display_value END), '⚪ N/A') AS `T1 Div Coverage`,
+        COALESCE(MAX(CASE WHEN signal = 'NAV Trajectory'                     THEN display_value END), '⚪ N/A') AS `T2 NAV Trend`,
+        COALESCE(MAX(CASE WHEN signal = 'Unrealized Depreciation / Net Assets' THEN display_value END), '⚪ N/A') AS `T2 Deprec/NAV`,
+        COALESCE(MAX(CASE WHEN signal = 'Realized Loss Acceleration'         THEN display_value END), '⚪ N/A') AS `T3 RL Acceleration`,
+        COALESCE(MAX(CASE WHEN signal = 'Cumulative Losses vs. NAV'          THEN display_value END), '⚪ N/A') AS `T3 Cum Loss/NAV`,
+        MAX(severity_score)                                                                                     AS worst_severity,
+        SUM(CASE WHEN advisor_action_needed THEN 1 ELSE 0 END)                                                  AS concern_count
     FROM flagged
     GROUP BY symbol
     ORDER BY worst_severity DESC, concern_count DESC
