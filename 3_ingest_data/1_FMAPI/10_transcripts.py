@@ -344,6 +344,34 @@ except Exception as e:
 
 # COMMAND ----------
 
+# ── Patch: backfill title and company_name in bronze_transcript_chunks ─────────
+# Existing chunks written before these columns existed will have nulls.
+# Join back to bronze_transcripts (already patched above) to fill them in.
+
+spark.sql(f"""
+    MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks AS tgt
+    USING (
+        SELECT DISTINCT symbol, year, quarter, title, company_name
+        FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts
+        WHERE title IS NOT NULL OR company_name IS NOT NULL
+    ) AS src
+    ON  tgt.symbol  = src.symbol
+    AND tgt.year    = src.year
+    AND tgt.quarter = src.quarter
+    AND (tgt.title IS NULL OR tgt.company_name IS NULL)
+    WHEN MATCHED THEN UPDATE SET
+        tgt.title        = src.title,
+        tgt.company_name = src.company_name
+""")
+
+_chunk_nulls = spark.sql(f"""
+    SELECT COUNT(*) FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks
+    WHERE title IS NULL OR company_name IS NULL
+""").collect()[0][0]
+print(f"Chunks still missing title or company_name: {_chunk_nulls}")
+
+# COMMAND ----------
+
 # ── Write parse log ───────────────────────────────────────────────────────────
 
 chunk_stats = (
