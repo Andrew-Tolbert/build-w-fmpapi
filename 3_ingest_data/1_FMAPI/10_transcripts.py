@@ -42,12 +42,13 @@ import pandas as pd
 
 spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts (
-        symbol   STRING  NOT NULL,
-        year     INT     NOT NULL,
-        quarter  INT     NOT NULL,
-        date     STRING,
-        title    STRING,
-        content  STRING
+        symbol       STRING  NOT NULL,
+        year         INT     NOT NULL,
+        quarter      INT     NOT NULL,
+        date         STRING,
+        title        STRING,
+        company_name STRING,
+        content      STRING
     )
     USING DELTA
 """)
@@ -60,6 +61,12 @@ try:
 except Exception:
     pass  # column doesn't exist — nothing to do
 
+try:
+    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts ADD COLUMN company_name STRING")
+    print("Added company_name column to bronze_transcripts.")
+except Exception:
+    pass  # column already exists
+
 # ── Stage 2 table: chunks for vector search ───────────────────────────────────
 
 spark.sql(f"""
@@ -70,6 +77,7 @@ spark.sql(f"""
         quarter       INT     NOT NULL,
         call_date     STRING,
         title         STRING,
+        company_name  STRING,
         call_section  STRING,
         chunk_index   INT,
         total_chunks  INT,
@@ -80,6 +88,12 @@ spark.sql(f"""
     USING DELTA
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 """)
+
+try:
+    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks ADD COLUMN company_name STRING")
+    print("Added company_name column to bronze_transcript_chunks.")
+except Exception:
+    pass  # column already exists
 
 # ── Idempotency log for chunking ──────────────────────────────────────────────
 
@@ -124,6 +138,47 @@ print(f"bronze_transcripts row count: {spark.table(f'{UC_CATALOG}.{UC_SCHEMA}.br
 
 # COMMAND ----------
 
+# ── Patch: backfill company_name and null titles ──────────────────────────────
+# Runs every time but only touches rows that need fixing.
+# company_name is not in the source JSON so Autoloader leaves it null — fill it
+# from bronze_company_profiles (which has the canonical company name per ticker).
+# title is null for transcripts fetched before the pull notebook was fixed — derive
+# it as "{company_name} Q{quarter} {year} Earnings Call".
+
+spark.sql(f"""
+    MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts AS tgt
+    USING (
+        SELECT t.symbol, t.year, t.quarter, cp.companyName AS company_name
+        FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts t
+        JOIN {UC_CATALOG}.{UC_SCHEMA}.bronze_company_profiles cp
+            ON t.symbol = cp.symbol
+        WHERE t.company_name IS NULL
+    ) AS src
+    ON  tgt.symbol  = src.symbol
+    AND tgt.year    = src.year
+    AND tgt.quarter = src.quarter
+    WHEN MATCHED THEN UPDATE SET tgt.company_name = src.company_name
+""")
+
+spark.sql(f"""
+    UPDATE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts
+    SET title = CONCAT(
+        COALESCE(company_name, symbol),
+        ' Q', CAST(quarter AS STRING),
+        ' ', CAST(year AS STRING),
+        ' Earnings Call'
+    )
+    WHERE title IS NULL OR TRIM(title) = ''
+""")
+
+_null_after = spark.sql(f"""
+    SELECT COUNT(*) FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts
+    WHERE title IS NULL
+""").collect()[0][0]
+print(f"Null titles remaining after patch: {_null_after}")
+
+# COMMAND ----------
+
 # ── Stage 2 work list — transcripts not yet chunked ───────────────────────────
 
 already_parsed = spark.sql(f"""
@@ -133,7 +188,7 @@ already_parsed = spark.sql(f"""
 
 transcripts_df = (
     spark.table(f"{UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts")
-    .select("symbol", "year", "quarter", "date", "title", "content")
+    .select("symbol", "year", "quarter", "date", "title", "company_name", "content")
     .join(already_parsed, on=["symbol", "year", "quarter"], how="left_anti")
     .filter(F.col("content").isNotNull() & (F.length(F.col("content")) > 0))
 )
@@ -156,6 +211,7 @@ CHUNK_SCHEMA = StructType([
     StructField("quarter",      IntegerType(), True),
     StructField("call_date",    StringType(),  True),
     StructField("title",        StringType(),  True),
+    StructField("company_name", StringType(),  True),
     StructField("call_section", StringType(),  True),
     StructField("chunk_index",  IntegerType(), True),
     StructField("total_chunks", IntegerType(), True),
@@ -228,6 +284,7 @@ def _chunk_transcripts(iterator):
                         "quarter":      int(row["quarter"]),
                         "call_date":    row.get("date"),
                         "title":        row.get("title"),
+                        "company_name": row.get("company_name"),
                         "call_section": section_name,
                         "chunk_index":  global_idx,
                         "total_chunks": 0,   # backfilled below
@@ -273,6 +330,8 @@ try:
         USING _new_transcript_chunks AS src
         ON tgt.chunk_id = src.chunk_id
         WHEN MATCHED THEN UPDATE SET
+            tgt.title        = src.title,
+            tgt.company_name = src.company_name,
             tgt.chunk_text   = src.chunk_text,
             tgt.char_count   = src.char_count,
             tgt.total_chunks = src.total_chunks,

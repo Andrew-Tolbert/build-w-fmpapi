@@ -85,7 +85,10 @@ for ticker in get_tickers():
                 "year":    year,
                 "quarter": quarter,
                 "date":    record.get("date"),
-                "title":   record.get("title"),
+                # FMP's earning-call-transcript endpoint does not return a title field.
+                # Fall back to a deterministic constructed title so bronze_transcripts
+                # is never left with a null title column.
+                "title":   record.get("title") or f"{ticker} Q{quarter} {year} Earnings Call",
                 "content": record.get("content", ""),
             }
 
