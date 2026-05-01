@@ -203,32 +203,17 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # DBTITLE 1,[GENIE] "Which clients have the worst IPS drift?"
 # MAGIC %sql
 # MAGIC SELECT
-# MAGIC   ac.client_id,
-# MAGIC   c.client_name,
-# MAGIC   c.advisor_id,
-# MAGIC   c.tier,
-# MAGIC   c.risk_profile,
-# MAGIC   ROUND(SUM(h.market_value) / 1e6, 3)                         AS client_aum_m,
-# MAGIC   ROUND(AVG(ABS(
-# MAGIC     COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC     - it.target_allocation_pct
-# MAGIC   )), 4)                                                       AS drift_score,
-# MAGIC   SUM(CASE
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          NOT BETWEEN it.min_allocation_pct AND it.max_allocation_pct
-# MAGIC     THEN 1 ELSE 0
-# MAGIC   END)                                                         AS breach_count
-# MAGIC FROM (SELECT DISTINCT account_id FROM holdings) accts
-# MAGIC JOIN accounts ac ON accts.account_id = ac.account_id
-# MAGIC JOIN clients  c  ON ac.client_id     = c.client_id
-# MAGIC JOIN (SELECT account_id, SUM(market_value) AS total_account_value FROM holdings GROUP BY account_id) at
-# MAGIC   ON accts.account_id = at.account_id
-# MAGIC CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) it_ac
-# MAGIC JOIN ips_targets it ON c.risk_profile = it.risk_profile AND it_ac.asset_class = it.asset_class
-# MAGIC LEFT JOIN (SELECT account_id, asset_class, SUM(market_value) AS actual_market_value FROM holdings GROUP BY account_id, asset_class) ab
-# MAGIC   ON accts.account_id = ab.account_id AND it_ac.asset_class = ab.asset_class
-# MAGIC JOIN holdings h ON accts.account_id = h.account_id
-# MAGIC GROUP BY ac.client_id, c.client_name, c.advisor_id, c.tier, c.risk_profile
+# MAGIC   client_id,
+# MAGIC   client_name,
+# MAGIC   advisor_id,
+# MAGIC   tier,
+# MAGIC   risk_profile,
+# MAGIC   ROUND(SUM(actual_market_value) / 1e6, 3)                   AS client_aum_m,
+# MAGIC   ROUND(AVG(ABS(drift_from_target_pct)), 4)                  AS drift_score,
+# MAGIC   SUM(CASE WHEN drift_status != 'Within Band' THEN 1 ELSE 0 END) AS breach_count,
+# MAGIC   ROUND(SUM(ABS(rebalance_to_band)) / 1e6, 3)                AS total_rebalance_abs_m
+# MAGIC FROM gold_ips_drift
+# MAGIC GROUP BY client_id, client_name, advisor_id, tier, risk_profile
 # MAGIC ORDER BY drift_score DESC
 # MAGIC LIMIT 30
 
@@ -236,175 +221,85 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,[GENIE] "Which accounts are overweight in Private Credit?"
 # MAGIC %sql
-# MAGIC WITH
-# MAGIC account_totals AS (
-# MAGIC   SELECT account_id, SUM(market_value) AS total_account_value FROM holdings GROUP BY account_id
-# MAGIC ),
-# MAGIC actual_by_class AS (
-# MAGIC   SELECT account_id, asset_class, SUM(market_value) AS actual_market_value
-# MAGIC   FROM holdings GROUP BY account_id, asset_class
-# MAGIC )
 # MAGIC SELECT
-# MAGIC   c.advisor_id,
-# MAGIC   c.client_id,
-# MAGIC   c.client_name,
-# MAGIC   ac.account_id,
-# MAGIC   ac.account_name,
-# MAGIC   ac.account_type,
-# MAGIC   c.tier,
-# MAGIC   c.risk_profile,
-# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100, 2) AS actual_pct,
-# MAGIC   it.target_allocation_pct AS target_pct,
-# MAGIC   it.max_allocation_pct    AS max_pct,
-# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.max_allocation_pct, 4) AS over_band_by_pct,
-# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / 1e6, 3) AS actual_mv_m,
-# MAGIC   ROUND(at.total_account_value / 1e6, 3)              AS account_aum_m,
-# MAGIC   ROUND(it.max_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0), 2) AS rebalance_to_band
-# MAGIC FROM (SELECT DISTINCT account_id FROM holdings) accts
-# MAGIC JOIN accounts ac ON accts.account_id = ac.account_id
-# MAGIC JOIN clients  c  ON ac.client_id     = c.client_id
-# MAGIC JOIN account_totals at ON accts.account_id = at.account_id
-# MAGIC JOIN ips_targets it ON c.risk_profile = it.risk_profile AND it.asset_class = 'Private Credit'
-# MAGIC LEFT JOIN actual_by_class ab ON accts.account_id = ab.account_id AND ab.asset_class = 'Private Credit'
-# MAGIC WHERE COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct
+# MAGIC   advisor_id,
+# MAGIC   client_id,
+# MAGIC   client_name,
+# MAGIC   account_id,
+# MAGIC   account_name,
+# MAGIC   account_type,
+# MAGIC   tier,
+# MAGIC   risk_profile,
+# MAGIC   ROUND(actual_allocation_pct, 2)   AS actual_pct,
+# MAGIC   target_allocation_pct             AS target_pct,
+# MAGIC   max_allocation_pct                AS max_pct,
+# MAGIC   ROUND(out_of_bounds_pct, 4)       AS over_band_by_pct,
+# MAGIC   ROUND(actual_market_value / 1e6, 3) AS actual_mv_m,
+# MAGIC   ROUND(total_account_value / 1e6, 3) AS account_aum_m,
+# MAGIC   ROUND(rebalance_to_band / 1e6, 3)   AS rebalance_to_band_m
+# MAGIC FROM gold_ips_drift
+# MAGIC WHERE asset_class = 'Private Credit'
+# MAGIC   AND drift_status = 'Over Band'
 # MAGIC ORDER BY over_band_by_pct DESC
 
 # COMMAND ----------
 
 # DBTITLE 1,[GENIE] "Show me all accounts outside their IPS bounds"
 # MAGIC %sql
-# MAGIC WITH
-# MAGIC account_totals AS (
-# MAGIC   SELECT account_id, SUM(market_value) AS total_account_value FROM holdings GROUP BY account_id
-# MAGIC ),
-# MAGIC actual_by_class AS (
-# MAGIC   SELECT account_id, asset_class, SUM(market_value) AS actual_market_value
-# MAGIC   FROM holdings GROUP BY account_id, asset_class
-# MAGIC )
 # MAGIC SELECT
-# MAGIC   c.client_name,
-# MAGIC   c.advisor_id,
-# MAGIC   ac.account_id,
-# MAGIC   ac.account_name,
-# MAGIC   ac.account_type,
-# MAGIC   g.asset_class,
-# MAGIC   CASE
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          > it.max_allocation_pct THEN 'Over Band'
-# MAGIC     ELSE 'Under Band'
-# MAGIC   END                                                        AS drift_status,
-# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100, 2) AS actual_pct,
-# MAGIC   it.target_allocation_pct AS target_pct,
-# MAGIC   it.min_allocation_pct    AS min_pct,
-# MAGIC   it.max_allocation_pct    AS max_pct,
-# MAGIC   ROUND(GREATEST(0,
-# MAGIC     COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.max_allocation_pct,
-# MAGIC     it.min_allocation_pct - COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC   ), 4)                                                      AS out_of_bounds_pct,
-# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / 1e6, 3)       AS actual_mv_m,
-# MAGIC   ROUND(at.total_account_value / 1e6, 3)                    AS account_aum_m
-# MAGIC FROM (SELECT DISTINCT account_id FROM holdings) accts
-# MAGIC CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) g
-# MAGIC JOIN accounts ac ON accts.account_id = ac.account_id
-# MAGIC JOIN clients  c  ON ac.client_id     = c.client_id
-# MAGIC JOIN account_totals at ON accts.account_id = at.account_id
-# MAGIC JOIN ips_targets it ON c.risk_profile = it.risk_profile AND g.asset_class = it.asset_class
-# MAGIC LEFT JOIN actual_by_class ab ON accts.account_id = ab.account_id AND g.asset_class = ab.asset_class
-# MAGIC WHERE
-# MAGIC   COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC   NOT BETWEEN it.min_allocation_pct AND it.max_allocation_pct
+# MAGIC   client_name,
+# MAGIC   advisor_id,
+# MAGIC   account_id,
+# MAGIC   account_name,
+# MAGIC   account_type,
+# MAGIC   asset_class,
+# MAGIC   drift_status,
+# MAGIC   drift_severity,
+# MAGIC   ROUND(actual_allocation_pct, 2)     AS actual_pct,
+# MAGIC   target_allocation_pct               AS target_pct,
+# MAGIC   min_allocation_pct                  AS min_pct,
+# MAGIC   max_allocation_pct                  AS max_pct,
+# MAGIC   out_of_bounds_pct,
+# MAGIC   ROUND(actual_market_value / 1e6, 3) AS actual_mv_m,
+# MAGIC   ROUND(total_account_value / 1e6, 3) AS account_aum_m,
+# MAGIC   ROUND(rebalance_to_band   / 1e6, 3) AS rebalance_to_band_m
+# MAGIC FROM gold_ips_drift
+# MAGIC WHERE drift_status != 'Within Band'
 # MAGIC ORDER BY out_of_bounds_pct DESC
 
 # COMMAND ----------
 
 # DBTITLE 1,[GENIE] "What is the total rebalance amount needed across all accounts?"
 # MAGIC %sql
-# MAGIC WITH
-# MAGIC account_totals AS (
-# MAGIC   SELECT account_id, SUM(market_value) AS total_account_value FROM holdings GROUP BY account_id
-# MAGIC ),
-# MAGIC actual_by_class AS (
-# MAGIC   SELECT account_id, asset_class, SUM(market_value) AS actual_market_value
-# MAGIC   FROM holdings GROUP BY account_id, asset_class
-# MAGIC )
 # MAGIC SELECT
-# MAGIC   g.asset_class,
-# MAGIC   CASE
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          > it.max_allocation_pct THEN 'Over Band'
-# MAGIC     ELSE 'Under Band'
-# MAGIC   END                                                        AS drift_status,
-# MAGIC   COUNT(DISTINCT accts.account_id)                           AS accounts_impacted,
-# MAGIC   COUNT(DISTINCT ac.client_id)                               AS clients_impacted,
-# MAGIC   ROUND(SUM(COALESCE(ab.actual_market_value, 0)) / 1e9, 3)   AS total_actual_b,
-# MAGIC   ROUND(SUM(it.target_allocation_pct / 100 * at.total_account_value) / 1e9, 3) AS total_target_b,
-# MAGIC   ROUND(SUM(
-# MAGIC     CASE
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct
-# MAGIC       THEN it.max_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0)
-# MAGIC       ELSE it.min_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0)
-# MAGIC     END
-# MAGIC   ) / 1e6, 2)                                                AS rebalance_to_band_m,
-# MAGIC   ROUND(SUM(ABS(
-# MAGIC     CASE
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct
-# MAGIC       THEN it.max_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0)
-# MAGIC       ELSE it.min_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0)
-# MAGIC     END
-# MAGIC   )) / 1e6, 2)                                               AS rebalance_abs_m
-# MAGIC FROM (SELECT DISTINCT account_id FROM holdings) accts
-# MAGIC CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) g
-# MAGIC JOIN accounts ac ON accts.account_id = ac.account_id
-# MAGIC JOIN clients  c  ON ac.client_id     = c.client_id
-# MAGIC JOIN account_totals at ON accts.account_id = at.account_id
-# MAGIC JOIN ips_targets it ON c.risk_profile = it.risk_profile AND g.asset_class = it.asset_class
-# MAGIC LEFT JOIN actual_by_class ab ON accts.account_id = ab.account_id AND g.asset_class = ab.asset_class
-# MAGIC WHERE
-# MAGIC   COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC   NOT BETWEEN it.min_allocation_pct AND it.max_allocation_pct
-# MAGIC GROUP BY g.asset_class, 2
+# MAGIC   asset_class,
+# MAGIC   drift_status,
+# MAGIC   COUNT(DISTINCT account_id)                        AS accounts_impacted,
+# MAGIC   COUNT(DISTINCT client_id)                         AS clients_impacted,
+# MAGIC   ROUND(SUM(actual_market_value)  / 1e9, 3)         AS total_actual_b,
+# MAGIC   ROUND(SUM(target_market_value)  / 1e9, 3)         AS total_target_b,
+# MAGIC   ROUND(SUM(rebalance_to_band)    / 1e6, 2)         AS rebalance_to_band_m,
+# MAGIC   ROUND(SUM(ABS(rebalance_to_band)) / 1e6, 2)       AS rebalance_abs_m
+# MAGIC FROM gold_ips_drift
+# MAGIC WHERE drift_status != 'Within Band'
+# MAGIC GROUP BY asset_class, drift_status
 # MAGIC ORDER BY rebalance_abs_m DESC
 
 # COMMAND ----------
 
 # DBTITLE 1,[GENIE] "Which advisors have the most clients with IPS drift?"
 # MAGIC %sql
-# MAGIC WITH
-# MAGIC account_totals AS (
-# MAGIC   SELECT account_id, SUM(market_value) AS total_account_value FROM holdings GROUP BY account_id
-# MAGIC ),
-# MAGIC actual_by_class AS (
-# MAGIC   SELECT account_id, asset_class, SUM(market_value) AS actual_market_value
-# MAGIC   FROM holdings GROUP BY account_id, asset_class
-# MAGIC ),
-# MAGIC drift_cells AS (
-# MAGIC   SELECT
-# MAGIC     ac.account_id,
-# MAGIC     ac.client_id,
-# MAGIC     c.advisor_id,
-# MAGIC     CASE
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            NOT BETWEEN it.min_allocation_pct AND it.max_allocation_pct THEN 1 ELSE 0
-# MAGIC     END AS is_breach,
-# MAGIC     at.total_account_value
-# MAGIC   FROM (SELECT DISTINCT account_id FROM holdings) accts
-# MAGIC   CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) g
-# MAGIC   JOIN accounts ac ON accts.account_id = ac.account_id
-# MAGIC   JOIN clients  c  ON ac.client_id     = c.client_id
-# MAGIC   JOIN account_totals at ON accts.account_id = at.account_id
-# MAGIC   JOIN ips_targets it ON c.risk_profile = it.risk_profile AND g.asset_class = it.asset_class
-# MAGIC   LEFT JOIN actual_by_class ab ON accts.account_id = ab.account_id AND g.asset_class = ab.asset_class
-# MAGIC )
 # MAGIC SELECT
 # MAGIC   advisor_id,
-# MAGIC   COUNT(DISTINCT client_id)                                   AS total_clients,
-# MAGIC   COUNT(DISTINCT account_id)                                  AS total_accounts,
-# MAGIC   ROUND(SUM(total_account_value) / 6 / 1e9, 3)               AS book_aum_b,
-# MAGIC   COUNT(DISTINCT CASE WHEN is_breach = 1 THEN client_id END)  AS clients_with_drift,
+# MAGIC   COUNT(DISTINCT client_id)                                        AS total_clients,
+# MAGIC   COUNT(DISTINCT account_id)                                       AS total_accounts,
+# MAGIC   ROUND(SUM(total_account_value) / COUNT(DISTINCT asset_class) / 1e9, 3) AS book_aum_b,
+# MAGIC   COUNT(DISTINCT CASE WHEN drift_status != 'Within Band' THEN client_id END) AS clients_with_drift,
 # MAGIC   ROUND(
-# MAGIC     COUNT(DISTINCT CASE WHEN is_breach = 1 THEN client_id END)
-# MAGIC     / NULLIF(COUNT(DISTINCT client_id), 0) * 100, 1)          AS pct_clients_drifted
-# MAGIC FROM drift_cells
+# MAGIC     COUNT(DISTINCT CASE WHEN drift_status != 'Within Band' THEN client_id END)
+# MAGIC     / NULLIF(COUNT(DISTINCT client_id), 0) * 100, 1)               AS pct_clients_drifted,
+# MAGIC   ROUND(SUM(ABS(rebalance_to_band)) / 1e6, 2)                      AS total_rebalance_abs_m
+# MAGIC FROM gold_ips_drift
 # MAGIC GROUP BY advisor_id
 # MAGIC ORDER BY clients_with_drift DESC
 
@@ -412,35 +307,16 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,[GENIE] "What is the average allocation vs target by asset class?"
 # MAGIC %sql
-# MAGIC WITH
-# MAGIC account_totals AS (
-# MAGIC   SELECT account_id, SUM(market_value) AS total_account_value FROM holdings GROUP BY account_id
-# MAGIC ),
-# MAGIC actual_by_class AS (
-# MAGIC   SELECT account_id, asset_class, SUM(market_value) AS actual_market_value
-# MAGIC   FROM holdings GROUP BY account_id, asset_class
-# MAGIC )
 # MAGIC SELECT
-# MAGIC   g.asset_class,
-# MAGIC   ROUND(AVG(COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100), 4) AS avg_actual_pct,
-# MAGIC   ROUND(AVG(it.target_allocation_pct), 4)                    AS avg_target_pct,
-# MAGIC   ROUND(AVG(
-# MAGIC     COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC     - it.target_allocation_pct
-# MAGIC   ), 4)                                                       AS avg_drift_pct,
-# MAGIC   COUNT(DISTINCT accts.account_id)                           AS total_accounts,
-# MAGIC   SUM(CASE WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            > it.max_allocation_pct THEN 1 ELSE 0 END)         AS over_band_count,
-# MAGIC   SUM(CASE WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            < it.min_allocation_pct THEN 1 ELSE 0 END)         AS under_band_count,
-# MAGIC   ROUND(SUM(COALESCE(ab.actual_market_value, 0)) / 1e9, 3)   AS total_actual_b,
-# MAGIC   ROUND(SUM(it.target_allocation_pct / 100 * at.total_account_value) / 1e9, 3) AS total_target_b
-# MAGIC FROM (SELECT DISTINCT account_id FROM holdings) accts
-# MAGIC CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) g
-# MAGIC JOIN accounts ac ON accts.account_id = ac.account_id
-# MAGIC JOIN clients  c  ON ac.client_id     = c.client_id
-# MAGIC JOIN account_totals at ON accts.account_id = at.account_id
-# MAGIC JOIN ips_targets it ON c.risk_profile = it.risk_profile AND g.asset_class = it.asset_class
-# MAGIC LEFT JOIN actual_by_class ab ON accts.account_id = ab.account_id AND g.asset_class = ab.asset_class
-# MAGIC GROUP BY g.asset_class
+# MAGIC   asset_class,
+# MAGIC   ROUND(AVG(actual_allocation_pct),      4) AS avg_actual_pct,
+# MAGIC   ROUND(AVG(target_allocation_pct),      4) AS avg_target_pct,
+# MAGIC   ROUND(AVG(drift_from_target_pct),      4) AS avg_drift_pct,
+# MAGIC   COUNT(DISTINCT account_id)                AS total_accounts,
+# MAGIC   SUM(CASE WHEN drift_status = 'Over Band'  THEN 1 ELSE 0 END) AS over_band_count,
+# MAGIC   SUM(CASE WHEN drift_status = 'Under Band' THEN 1 ELSE 0 END) AS under_band_count,
+# MAGIC   ROUND(SUM(actual_market_value) / 1e9, 3)  AS total_actual_b,
+# MAGIC   ROUND(SUM(target_market_value) / 1e9, 3)  AS total_target_b
+# MAGIC FROM gold_ips_drift
+# MAGIC GROUP BY asset_class
 # MAGIC ORDER BY ABS(avg_drift_pct) DESC
