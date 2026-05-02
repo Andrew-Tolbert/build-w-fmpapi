@@ -23,6 +23,14 @@
 #   chunk_text   — text to embed
 #
 # Source: UC_VOLUME_PATH/transcripts/{TICKER}/Q{q}_{year}.json
+#
+# Section splitting — 3-strategy approach (see 9_scratchpad/transcript_section_analysis.py):
+#   Strategy 1: expanded line-anchored Q&A phrases  (fastest, handles most calls)
+#   Strategy 2: search inside Operator speaker blocks for Q&A keywords  (catches
+#               transitions embedded mid-paragraph rather than starting a new line)
+#   Strategy 3: first-new-speaker heuristic — management team = first 4 non-Operator
+#               speakers; first outsider = analyst = Q&A start
+#   Fallback:   full_text (no section boundary found)
 
 # COMMAND ----------
 
@@ -187,27 +195,79 @@ def _chunk_transcripts(iterator):
     CHUNK_OVERLAP = 150
     MIN_CHUNK     = 200
 
-    # Patterns that signal the start of the Q&A portion of a call
-    _QA_RE = re.compile(
-        r'(?im)^\s*(?:question[- ]and[- ]answer|q\s*&\s*a|q\s*and\s*a'
-        r'|questions?\s+and\s+answers?'
-        r'|operator\s+instructions?\s+for\s+q(?:uestion)?'
-        r'|we\s+will\s+now\s+begin\s+the\s+question)',
-        re.IGNORECASE,
-    )
-
     def split_sections(text):
-        m = _QA_RE.search(text)
+        """Split transcript into prepared_remarks + qa using a 3-strategy approach.
+
+        Strategy 1 — expanded line-anchored Q&A phrases.
+        Strategy 2 — keyword search inside Operator speaker blocks (catches
+                     transitions embedded mid-paragraph, not starting a new line).
+        Strategy 3 — first-new-speaker heuristic: management team = first 4
+                     non-Operator speakers; the first outsider signals Q&A start.
+        Fallback   — return full_text when no boundary is found.
+        """
+
+        # ── Strategy 1 ───────────────────────────────────────────────────────
+        _S1 = re.compile(
+            r'(?im)^\s*(?:'
+            r'question[- ]and[- ]answer'
+            r'|q\s*&\s*a\s+session'
+            r'|q\s*and\s*a'
+            r'|questions?\s+and\s+answers?'
+            r'|we\s+will\s+now\s+(?:open|begin|start|take)\s+(?:the\s+)?'
+            r'(?:floor\s+for\s+questions?|q(?:uestion)?(?:[-\s]*(?:and[-\s]*answer|&\s*a))?)'
+            r'|(?:now\s+)?(?:open|begin)\s+(?:the\s+)?question[-\s]and[-\s]answer'
+            r'|now\s+(?:open|begin|take)\s+(?:questions|q&a)'
+            r'|operator\s+instructions?\s+for\s+q(?:uestion)?'
+            r'|please\s+(?:press|dial)\s+(?:star|\*)\s*(?:one|1)\s+(?:if\s+you|to\s+ask|for\s+question)'
+            r')',
+        )
+        m = _S1.search(text)
         if m:
-            prepared = text[:m.start()].strip()
-            qa       = text[m.start():].strip()
-            sections = []
-            if len(prepared) >= MIN_CHUNK:
-                sections.append(("prepared_remarks", prepared))
-            if len(qa) >= MIN_CHUNK:
-                sections.append(("qa", qa))
-            if sections:
-                return sections
+            block_start = text.rfind('\n', 0, m.start())
+            block_start = 0 if block_start == -1 else block_start
+            prepared = text[:block_start].strip()
+            qa = text[block_start:].strip()
+            if len(prepared) >= MIN_CHUNK and len(qa) >= MIN_CHUNK:
+                return [("prepared_remarks", prepared), ("qa", qa)]
+
+        # ── Strategy 2 ───────────────────────────────────────────────────────
+        _OP_BLOCK = re.compile(r'(?ms)^Operator:\s+(.+?)(?=\n[A-Z][A-Za-z]|\Z)')
+        _QA_KW    = re.compile(
+            r'(?i)'
+            r'(?:open(?:ing)?\s+(?:the\s+)?(?:floor|call|line)\s+for\s+questions?'
+            r'|begin\s+(?:the\s+)?(?:question|q(?:\s*&\s*|\s+and\s+)a)'
+            r'|(?:press|dial)\s+(?:star|\*)\s*(?:one|1)'
+            r'|q(?:\s*&\s*|\s+and\s+)a\s+session'
+            r'|(?:our\s+)?first\s+question\s+(?:comes?\s+from|is\s+from)'
+            r'|take\s+questions?\s+(?:now|at\s+this\s+time)'
+            r')',
+        )
+        for op_m in _OP_BLOCK.finditer(text):
+            if _QA_KW.search(op_m.group(1)):
+                split_pos = op_m.start()
+                prepared = text[:split_pos].strip()
+                qa = text[split_pos:].strip()
+                if len(prepared) >= MIN_CHUNK and len(qa) >= MIN_CHUNK:
+                    return [("prepared_remarks", prepared), ("qa", qa)]
+
+        # ── Strategy 3 ───────────────────────────────────────────────────────
+        _TURN = re.compile(r'(?m)^([A-Z][A-Za-z\.\-\s]{2,35}):\s+')
+        mgmt: list = []
+        for sm in _TURN.finditer(text):
+            spkr = sm.group(1).strip()
+            if spkr == "Operator":
+                continue
+            if len(mgmt) < 4:
+                if spkr not in mgmt:
+                    mgmt.append(spkr)
+            elif spkr not in mgmt:
+                prev_op = text.rfind("\nOperator:", 0, sm.start())
+                split_pos = prev_op if prev_op > 0 else sm.start()
+                prepared = text[:split_pos].strip()
+                qa = text[split_pos:].strip()
+                if len(prepared) >= MIN_CHUNK and len(qa) >= MIN_CHUNK:
+                    return [("prepared_remarks", prepared), ("qa", qa)]
+
         return [("full_text", text)]
 
     def fixed_chunk(text):
