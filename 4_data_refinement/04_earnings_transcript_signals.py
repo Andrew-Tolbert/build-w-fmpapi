@@ -152,15 +152,14 @@ else:
                   AND LENGTH(TRIM(section_text)) > 200
             ),
 
-            -- ── Two AI calls per section ───────────────────────────────────────────
-            --   1. ai_analyze_sentiment — overall section sentiment (shared across all signals)
-            --   2. ai_query            — returns JSON array of 1-5 signals
-            --      Different prompt per section: prepared_remarks extracts disclosed events;
-            --      qa extracts analyst intelligence (what analysts uncovered or probed).
+            -- ── One AI call per section ────────────────────────────────────────────
+            -- ai_query returns a JSON array of 1-5 signals. Each signal carries its
+            -- own sentiment field so directional signals (Guidance Change down = Negative)
+            -- are not blended with positive signals from the same section.
+            -- ai_analyze_sentiment removed — sentiment is now per-signal, not per-section.
             extracted AS (
                 SELECT
                     symbol, year, quarter, call_section, call_date, title,
-                    ai_analyze_sentiment(context_text) AS sentiment_raw,
                     TRIM(REGEXP_REPLACE(
                         ai_query(
                             '{LLM_ENDPOINT}',
@@ -171,24 +170,32 @@ else:
                                     'of an earnings call. Q&A reveals what analysts are worried about — the ',
                                     'scripted message is already in the prepared remarks.\\n\\n',
                                     'Return a JSON array of 1–5 distinct analyst intelligence signals. ',
-                                    'Each element must have exactly these four fields:\\n',
+                                    'Each element must have exactly these five fields:\\n',
                                     '  signal_type  — one of: Credit Stress Probe, Guidance Pressure, ',
                                     'Surprise Disclosure, Analyst Concern, Macro Risk, ',
                                     'Guidance Confirmed, Results Confirmed\\n',
+                                    '  sentiment    — Positive, Negative, or Neutral for THIS signal specifically\\n',
                                     '  signal_value — High, Medium, or Low\\n',
                                     '  advisor_action_needed — true or false\\n',
                                     '  rationale — 1-2 sentences: what analysts probed, what management ',
                                     'revealed or concealed\\n\\n',
+                                    'Sentiment rules: Analyst Concern / Credit Stress Probe / Guidance Pressure / ',
+                                    'Surprise Disclosure = Negative. Guidance Confirmed / Results Confirmed = Positive. ',
+                                    'Macro Risk = Negative unless management clearly dismissed it.\\n\\n',
+                                    'advisor_action_needed rules — set true ONLY for: (a) BDC Credit Stress Probe ',
+                                    'where specific names, non-accruals, or PIK borrowers are mentioned; ',
+                                    '(b) Surprise Disclosure that materially changes the investment thesis; ',
+                                    '(c) Guidance Pressure where management explicitly reduced or walked back ',
+                                    'company-level EPS or net income guidance under questioning. ',
+                                    'Routine analyst follow-ups, confirmatory Q&A, and general macro questions ',
+                                    'are NOT advisor action items even if rated High.\\n\\n',
                                     'Definitions:\\n',
                                     '  Credit Stress Probe: analysts asking about specific borrower names, ',
-                                    'non-accruals, PIK interest, or covenant headroom — flag High if names ',
-                                    'are mentioned or management hedged\\n',
-                                    '  Guidance Pressure: management hedged, qualified, or reduced expectations ',
-                                    'under analyst questioning\\n',
-                                    '  Surprise Disclosure: material info absent from prepared remarks that ',
-                                    'surfaced only under questioning\\n',
-                                    '  Analyst Concern: concentrated skepticism on a specific risk management ',
-                                    'did not proactively address\\n',
+                                    'non-accruals, PIK interest, or covenant headroom\\n',
+                                    '  Guidance Pressure: management hedged or reduced expectations under questioning\\n',
+                                    '  Surprise Disclosure: material info absent from prepared remarks surfaced ',
+                                    'only under questioning\\n',
+                                    '  Analyst Concern: concentrated skepticism on a specific risk\\n',
                                     '  Guidance Confirmed / Results Confirmed: analyst probed and management ',
                                     'reaffirmed — a positive signal, include it\\n\\n',
                                     'Only include signals clearly present. ',
@@ -200,22 +207,34 @@ else:
                                     'You are a Goldman Sachs wealth advisor analyst reviewing PREPARED REMARKS ',
                                     'from an earnings call. This is the scripted, management-controlled section.\\n\\n',
                                     'Return a JSON array of 1–5 distinct investment signals found in the text. ',
-                                    'Each element must have exactly these four fields:\\n',
+                                    'Each element must have exactly these five fields:\\n',
                                     '  signal_type  — one of: Earnings Beat, Earnings Miss, Earnings In-Line, ',
                                     'Guidance Change, Credit Event, Dividend Change, Management Change, Operational Update\\n',
+                                    '  sentiment    — Positive, Negative, or Neutral for THIS signal specifically\\n',
                                     '  signal_value — High, Medium, or Low\\n',
                                     '  advisor_action_needed — true or false\\n',
                                     '  rationale — 1-2 sentences on the investment implication. ',
                                     'Be specific with numbers when available.\\n\\n',
-                                    'Rules:\\n',
+                                    'Sentiment rules: Earnings Beat / Guidance Change up / Dividend raise = Positive. ',
+                                    'Earnings Miss / Guidance Change down / Credit Event / Dividend cut = Negative. ',
+                                    'Earnings In-Line / Operational Update = Neutral. ',
+                                    'A Guidance Change where overall company EPS or net income is guided lower is ',
+                                    'Negative even if a few segments are guided higher.\\n\\n',
+                                    'advisor_action_needed rules — set true ONLY for: (a) BDC Credit Event ',
+                                    '(non-accrual, PIK toggle, NAV decline ≥5%); ',
+                                    '(b) Earnings Miss of ≥10% below prior consensus or management expectations; ',
+                                    '(c) CEO or CFO departure; ',
+                                    '(d) Guidance Change where company-level EPS or net income is cut ≥15% from ',
+                                    'prior guidance or prior-year actuals. ',
+                                    'A modest earnings beat, routine guidance trim, or expected operational update ',
+                                    'is NOT an advisor action item.\\n\\n',
+                                    'Signal rules:\\n',
                                     '  Always use Earnings Beat, Earnings Miss, or Earnings In-Line — ',
                                     'never a generic Earnings label\\n',
-                                    '  Emit at most ONE Guidance Change signal per call. Assess the NET ',
-                                    'company-level EPS or net income direction — if overall guidance is lower ',
-                                    'the signal is negative even when individual segments or product lines ',
-                                    'are guided higher. Describe the mix in the rationale but the signal ',
-                                    'must reflect the whole-company impact. Do not emit separate guidance ',
-                                    'signals for individual business units or product segments.\\n',
+                                    '  Emit at most ONE Guidance Change signal. Assess the NET company-level EPS ',
+                                    'or net income direction. If overall guidance is lower the signal is Negative ',
+                                    'even when individual segments are guided higher. Describe the mix in the ',
+                                    'rationale but do not emit separate signals per business unit.\\n',
                                     '  Credit Event is highest priority for BDCs: any non-accrual, PIK toggle, ',
                                     'NAV decline, or covenant breach\\n',
                                     '  Only include signals clearly present — do not pad\\n\\n',
@@ -235,14 +254,13 @@ else:
             exploded AS (
                 SELECT
                     e.symbol, e.year, e.quarter, e.call_section, e.call_date, e.title,
-                    e.sentiment_raw,
                     pv.pos,
                     pv.sig
                 FROM extracted e
                 LATERAL VIEW posexplode(
                     from_json(
                         e.signals_json,
-                        'ARRAY<STRUCT<signal_type:STRING, signal_value:STRING, advisor_action_needed:BOOLEAN, rationale:STRING>>'
+                        'ARRAY<STRUCT<signal_type:STRING, sentiment:STRING, signal_value:STRING, advisor_action_needed:BOOLEAN, rationale:STRING>>'
                     )
                 ) pv AS pos, sig
                 WHERE pv.sig IS NOT NULL
@@ -264,7 +282,7 @@ else:
                         ELSE                         'Full Transcript'
                     END
                 )                                                                 AS source_description,
-                INITCAP(COALESCE(sentiment_raw, 'neutral'))                       AS sentiment,
+                INITCAP(COALESCE(sig.sentiment, 'neutral'))                        AS sentiment,
                 CASE sig.signal_value
                     WHEN 'High'   THEN 0.9
                     WHEN 'Medium' THEN 0.5
