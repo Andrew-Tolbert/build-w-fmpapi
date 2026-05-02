@@ -139,12 +139,12 @@ resources:
             base_parameters:
               <<: *base_params
 
-        - task_key: ingest_fmapi_08b_news_signals
+        - task_key: refinement_01_news_signals
           depends_on:
             - task_key: ingest_fmapi_08_news
           <<: *serverless_env
           notebook_task:
-            notebook_path: "3_ingest_data/1_FMAPI/08b_news_signals"
+            notebook_path: "4_data_refinement/01_news_signals"
             base_parameters:
               <<: *base_params
 
