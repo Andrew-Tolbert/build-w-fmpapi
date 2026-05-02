@@ -114,7 +114,7 @@ else:
             -- ── Aggregate chunks per filing with section priority ──────────────────
             -- 10-K: mda carries the most actionable content, followed by risk_factors.
             -- 8-K / other: all sections in chunk order (usually one section anyway).
-            -- Cap raised to 12 000 chars — covers ~8 chunks vs the old 4, ensuring
+            -- Cap raised to 120 000 chars — covers ~8 chunks vs the old 4, ensuring
             -- 10-K MDA and risk disclosures are not truncated mid-argument.
             aggregated AS (
                 SELECT
@@ -140,7 +140,7 @@ else:
                                 x -> x.chunk_text
                             )
                         ),
-                        12000
+                        180000
                     ) AS document_text
                 FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks c
                 JOIN new_filings nf USING (symbol, accession)
@@ -314,5 +314,3 @@ display(
         ORDER BY symbol, signal_date DESC, severity_score DESC
     """)
 )
-
-# COMMAND ----------
