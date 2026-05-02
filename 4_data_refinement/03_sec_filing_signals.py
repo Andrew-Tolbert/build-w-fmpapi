@@ -34,9 +34,9 @@
 # Idempotency: a filing is considered processed when its position-0 signal exists in gold.
 #
 # NOTE: if re-running after the old single-signal-per-filing schema, clear first:
-#   DELETE FROM gold_unified_signals WHERE source_type = 'sec_filing'
+#   DELETE FROM gold_unified_signals WHERE source_type LIKE 'sec_filing_%'
 #
-# Output: {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals  (source_type = 'sec_filing')
+# Output: {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals  (source_type = 'sec_filing_<form_type>')
 # Run after: 3_ingest_data/1_FMAPI/12_sec_parsing.py
 
 # COMMAND ----------
@@ -52,7 +52,17 @@ dbutils.widgets.text("test_limit", "")  # empty = process all; set a number (e.g
 # COMMAND ----------
 
 # # Uncomment to reset SEC filing signals only
-# spark.sql(f"DELETE FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals WHERE source_type = 'sec_filing'")
+# spark.sql(f"DELETE FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals WHERE source_type LIKE 'sec_filing_%'")
+
+# COMMAND ----------
+
+# Backfill: set source_type = 'sec_filing_<form_type>' for rows written before this change.
+# Safe to re-run — only touches rows still carrying the old 'sec_filing' value.
+spark.sql(f"""
+    UPDATE {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
+    SET source_type = CONCAT('sec_filing_', split(source_description, ' — ')[0])
+    WHERE source_type = 'sec_filing'
+""")
 
 # COMMAND ----------
 
@@ -263,7 +273,7 @@ else:
                 md5(CONCAT(symbol, '|', accession, '|', CAST(pos AS STRING)))  AS signal_id,
                 symbol,
                 TRY_CAST(filing_date AS DATE)                                   AS signal_date,
-                'sec_filing'                                                    AS source_type,
+                CONCAT('sec_filing_', form_type)                                 AS source_type,
                 CONCAT(form_type, ' — ', filing_date)                          AS source_description,
                 INITCAP(COALESCE(sig.sentiment, 'neutral'))                     AS sentiment,
                 CASE sig.signal_value
@@ -310,7 +320,7 @@ display(
                advisor_action_needed, sentiment, severity_score,
                LEFT(rationale, 250) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
-        WHERE source_type = 'sec_filing'
+        WHERE source_type LIKE 'sec_filing_%'
         ORDER BY symbol, signal_date DESC, severity_score DESC
     """)
 )
