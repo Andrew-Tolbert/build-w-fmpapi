@@ -152,10 +152,13 @@ resources:
     # MONTHLY — reference data, filings, earnings; updated end-of-month
     # Schedule: 3:00 AM UTC on the 1st of each month
     # Tasks: company profiles, financials, key metrics, ETF data, SEC filings,
-    #        transcripts, financial reports, FactSet filings, EDGAR BDC signals
+    #        transcripts, financial reports, FactSet filings, EDGAR BDC signals,
+    #        + refinement signals for SEC filings, transcripts, BDC early warnings
     # DAG: profiles → financials → key_metrics → etf_data
-    #        → [sec_filings | transcripts | financial_reports] (log, parallel)
-    #      factset_filings and edgar_bdc run independently in parallel
+    #        → [sec_filings | transcripts | financial_reports] (parallel)
+    #      sec_filings → sec_parsing → sec_validation → refinement_03_sec_filing_signals
+    #      transcripts → ingest_transcripts → refinement_04_earnings_transcript_signals
+    #      edgar_bdc (independent) → refinement_02_bdc_signals
     # ══════════════════════════════════════════════════════════════════════════
     gs_awm_ingest_monthly:
       name: "GS AWM | Data Ingest | Monthly"
@@ -318,5 +321,33 @@ resources:
           <<: *serverless_env
           notebook_task:
             notebook_path: "3_ingest_data/3_EDGAR/bdc_early_warning_sql"
+            base_parameters:
+              <<: *base_params
+
+        # ── Refinement: signals from ingested data ─────────────────────────────
+        - task_key: refinement_02_bdc_signals
+          depends_on:
+            - task_key: ingest_edgar_bdc_early_warning
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "4_data_refinement/02_bdc_signals"
+            base_parameters:
+              <<: *base_params
+
+        - task_key: refinement_03_sec_filing_signals
+          depends_on:
+            - task_key: ingest_fmapi_13_sec_validation
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "4_data_refinement/03_sec_filing_signals"
+            base_parameters:
+              <<: *base_params
+
+        - task_key: refinement_04_earnings_transcript_signals
+          depends_on:
+            - task_key: ingest_fmapi_10_transcripts
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "4_data_refinement/04_earnings_transcript_signals"
             base_parameters:
               <<: *base_params
