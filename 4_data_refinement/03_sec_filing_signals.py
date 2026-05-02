@@ -56,16 +56,6 @@ dbutils.widgets.text("test_limit", "")  # empty = process all; set a number (e.g
 
 # COMMAND ----------
 
-# Backfill: set source_type = 'sec_filing_<form_type>' for rows written before this change.
-# Safe to re-run — only touches rows still carrying the old 'sec_filing' value.
-spark.sql(f"""
-    UPDATE {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
-    SET source_type = CONCAT('sec_filing_', split(source_description, ' — ')[0])
-    WHERE source_type = 'sec_filing'
-""")
-
-# COMMAND ----------
-
 spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals (
         signal_id             STRING,
