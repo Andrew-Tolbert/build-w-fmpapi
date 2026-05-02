@@ -61,19 +61,6 @@ spark.sql(f"""
     USING DELTA
 """)
 
-# Drop legacy id column if it exists (old schema had id NOT NULL which conflicts
-# with Autoloader since the JSON files don't contain an id field).
-try:
-    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts DROP COLUMN id")
-    print("Dropped legacy id column from bronze_transcripts.")
-except Exception:
-    pass  # column doesn't exist — nothing to do
-
-try:
-    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcripts ADD COLUMN company_name STRING")
-    print("Added company_name column to bronze_transcripts.")
-except Exception:
-    pass  # column already exists
 
 # ── Stage 2 table: chunks for vector search ───────────────────────────────────
 
@@ -96,12 +83,6 @@ spark.sql(f"""
     USING DELTA
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 """)
-
-try:
-    spark.sql(f"ALTER TABLE {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks ADD COLUMN company_name STRING")
-    print("Added company_name column to bronze_transcript_chunks.")
-except Exception:
-    pass  # column already exists
 
 # ── Idempotency log for chunking ──────────────────────────────────────────────
 
