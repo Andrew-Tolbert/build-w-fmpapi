@@ -6,26 +6,35 @@
 #   "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt",
 # ]
 # ///
-# Produce unified signals from SEC filings (10-K, 10-Q, 8-K, etc.).
+# Produce unified signals from SEC filings (10-K, 10-Q, 8-K, 424B, etc.).
 #
 # Reads sec_filing_chunks (populated by 3_ingest_data/1_FMAPI/12_sec_parsing.py),
-# aggregates text chunks per filing document (accession), then uses Databricks AI
-# Functions to extract sentiment, classify the filing event, assess severity, and
-# generate an advisor-facing rationale.
+# aggregates text per filing with section prioritization (mda → risk_factors → rest),
+# then extracts multiple signals per filing via a single ai_query call.
 #
-# Processing logic:
-#   1. Group chunks by (symbol, accession, form_type, filing_date) — one signal per filing
-#   2. Only process is_latest = true filings (most recent per ticker + form type)
-#   3. Concatenate chunks in order up to 8000 chars for AI context
-#   4. Three-function AI pipeline:
-#      - ai_analyze_sentiment  → sentiment direction
-#      - ai_classify           → signal type (Earnings/Credit Event/M&A/Guidance/Regulatory/Other)
-#      - ai_classify           → severity (High/Medium/Low)
-#      - ai_query              → 2-3 sentence rationale
-#   5. MERGE into gold_unified_signals on signal_id = md5(symbol | accession)
+# One AI call per filing — ai_query returns a JSON array of 1-4 signals which are
+# exploded into individual rows. Each signal carries its own sentiment so directional
+# events (Credit Event, Earnings Miss) are Negative rather than blending with any
+# positive context in the same document.
 #
-# Idempotency: anti-join on (source_type='sec_filing', source_id=accession, symbol).
-# Only accessions not yet in gold are processed on re-runs.
+# Signal types by filing context:
+#   Earnings Beat / Earnings Miss / Earnings In-Line  — results disclosures (8-K, 10-Q, 10-K)
+#   Guidance Change    — net company-level EPS/income direction; one signal, net impact only
+#   Credit Event       — HIGHEST PRIORITY for BDCs: non-accrual, PIK toggle, NAV decline,
+#                        covenant breach, credit rating change, debt restructuring
+#   M&A                — merger, acquisition, divestiture, spin-off, major strategic transaction
+#   Management Change  — CEO, CFO, CIO, or board-level departure or appointment
+#   Regulatory Action  — SEC/DOJ/CFTC enforcement, investigation, fine, compliance failure
+#   Capital Action     — debt issuance, buyback, dividend policy change, rights offering
+#                        (critical for BDC 424B prospectus supplements)
+#   Risk Disclosure    — new or materially heightened risk factors (10-K focused)
+#   Operational Update — strategic change, restructuring, new product or market, cost program
+#
+# Signal ID: md5(symbol|accession|pos) — one row per signal per filing.
+# Idempotency: a filing is considered processed when its position-0 signal exists in gold.
+#
+# NOTE: if re-running after the old single-signal-per-filing schema, clear first:
+#   DELETE FROM gold_unified_signals WHERE source_type = 'sec_filing'
 #
 # Output: {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals  (source_type = 'sec_filing')
 # Run after: 3_ingest_data/1_FMAPI/12_sec_parsing.py
@@ -38,7 +47,7 @@
 
 LLM_ENDPOINT = "databricks-claude-sonnet-4-6"
 
-dbutils.widgets.text("test_limit", "")  # empty = process all; set a number to cap for testing
+dbutils.widgets.text("test_limit", "")  # empty = process all; set a number (e.g. "10") to cap filings for testing
 
 # COMMAND ----------
 
@@ -72,11 +81,12 @@ spark.sql(f"""
 _test_limit = dbutils.widgets.get("test_limit").strip()
 _limit_clause = f"LIMIT {_test_limit}" if _test_limit else ""
 
+# A filing is "done" when its position-0 signal exists in gold.
 new_count = spark.sql(f"""
     SELECT COUNT(DISTINCT c.accession)
     FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks c
     LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
-        ON g.signal_id = md5(CONCAT(c.symbol, '|', c.accession))
+        ON g.signal_id = md5(CONCAT(c.symbol, '|', c.accession, '|', '0'))
     WHERE c.is_latest = true
 """).collect()[0][0]
 
@@ -91,30 +101,30 @@ else:
         MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals AS tgt
         USING (
 
-            -- ── Step 1: Aggregate text chunks per filing ─────────────────────────
+            -- ── Find filings not yet in gold ──────────────────────────────────────
             WITH new_filings AS (
-                SELECT DISTINCT symbol, accession
+                SELECT DISTINCT c.symbol, c.accession
                 FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks c
                 LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
-                    ON g.signal_id = md5(CONCAT(c.symbol, '|', c.accession))
+                    ON g.signal_id = md5(CONCAT(c.symbol, '|', c.accession, '|', '0'))
                 WHERE c.is_latest = true
                 {_limit_clause}
             ),
 
-            -- Prioritise informative sections when concatenating:
-            -- 10-K: mda first, then risk_factors, then rest
-            -- 8-K / other: all chunks in chunk_index order
+            -- ── Aggregate chunks per filing with section priority ──────────────────
+            -- 10-K: mda carries the most actionable content, followed by risk_factors.
+            -- 8-K / other: all sections in chunk order (usually one section anyway).
+            -- Cap raised to 12 000 chars — covers ~8 chunks vs the old 4, ensuring
+            -- 10-K MDA and risk disclosures are not truncated mid-argument.
             aggregated AS (
                 SELECT
                     c.symbol,
                     c.form_type,
                     c.filing_date,
                     c.accession,
-                    -- Concatenate chunks ordered by section priority then chunk_index.
-                    -- LEFT() truncates to 8000 chars so the AI context stays within limits.
                     LEFT(
                         CONCAT_WS(
-                            '\n\n',
+                            '\\n\\n',
                             transform(
                                 sort_array(collect_list(struct(
                                     CASE c.section_name
@@ -130,7 +140,7 @@ else:
                                 x -> x.chunk_text
                             )
                         ),
-                        8000
+                        12000
                     ) AS document_text
                 FROM {UC_CATALOG}.{UC_SCHEMA}.sec_filing_chunks c
                 JOIN new_filings nf USING (symbol, accession)
@@ -138,7 +148,7 @@ else:
                 GROUP BY c.symbol, c.form_type, c.filing_date, c.accession
             ),
 
-            -- ── Step 2: Build context string for AI functions ─────────────────
+            -- ── Build framed context string ────────────────────────────────────────
             context AS (
                 SELECT
                     symbol, form_type, filing_date, accession,
@@ -155,74 +165,120 @@ else:
                   AND LENGTH(TRIM(document_text)) > 100
             ),
 
-            -- ── Step 3: AI signal extraction ──────────────────────────────────
-            signals AS (
+            -- ── Single ai_query per filing — returns JSON array of 1-4 signals ─────
+            -- Each signal carries its own sentiment so a Credit Event in an otherwise
+            -- strong 10-K is correctly labelled Negative rather than blended to Mixed.
+            extracted AS (
                 SELECT
                     symbol, form_type, filing_date, accession,
-                    ai_analyze_sentiment(context_text) AS sentiment_raw,
-                    ai_classify(
-                        context_text,
-                        '{{"Earnings":          "Quarterly or annual financial results, EPS beats/misses, revenue surprises, profit warnings, or financial condition disclosures",
-                          "Credit Event":      "Covenant breach, credit rating change, debt restructuring, non-accrual designation, NAV deterioration, liquidity issues, or default risk",
-                          "M&A":               "Merger, acquisition, divestiture, takeover, spin-off, or major strategic transaction",
-                          "Guidance":          "Forward revenue or earnings guidance raised, lowered, or withdrawn; management outlook changes",
-                          "Management Change": "CEO, CFO, CIO, or board-level executive departure, appointment, or transition",
-                          "Regulatory":        "SEC enforcement, CFTC action, government investigation, fine, sanction, or material regulatory development",
-                          "Other":             "Other material disclosures not covered above"}}',
-                        MAP(
-                            'instructions',
-                            'You are classifying SEC filings for a Goldman Sachs wealth management platform. Assign the PRIMARY financial significance category. For 10-K filings, assess the most material theme in the document. For 8-K filings, classify the specific triggering event. Credit Events are highest priority — flag any BDC non-accrual, covenant breach, or NAV deterioration. For 424B filings (prospectus supplements), classify as Guidance if they describe capital raises or dividend policy changes.'
-                        )
-                    ) AS signal_type_raw,
-                    ai_classify(
-                        context_text,
-                        '{{"High":   "Filing discloses material negative developments requiring immediate client notification — earnings miss, credit deterioration, covenant breach, regulatory penalty, M&A surprise, CEO departure, guidance cut",
-                          "Medium": "Filing provides important context that should be monitored — analyst day, routine guidance update, minor regulatory matter, management commentary",
-                          "Low":    "Routine administrative filing with minimal investment relevance — exhibit amendments, insider transactions, boilerplate disclosures"}}',
-                        MAP(
-                            'instructions',
-                            'You are assessing the financial materiality of SEC filings for Goldman Sachs UHNW wealth management. BDC credit events (NAV declines, non-accruals, PIK toggles) are always High materiality. 10-K annual reports are at least Medium. 8-K filings about earnings results: High if miss, Medium if beat. Prospectus supplements for BDCs can be High if they indicate capital stress.'
-                        )
-                    ) AS severity_raw,
-                    TRIM(ai_query(
-                        '{LLM_ENDPOINT}',
-                        CONCAT(
-                            'You are a Goldman Sachs wealth advisor assistant. Write exactly 2-3 sentences explaining ',
-                            'the key investment implication of this SEC filing for a UHNW wealth advisor.\\n',
-                            'Issuer: ', symbol, ' | Form: ', form_type, ' | Filed: ', filing_date, '\\n',
-                            'Document excerpt:\\n',
-                            LEFT(context_text, 3000), '\\n\\n',
-                            'Be specific about financial impact. Do not start with "I" or summarize all details — focus on what the advisor needs to act on.'
-                        )
-                    )) AS rationale
+                    TRIM(REGEXP_REPLACE(
+                        ai_query(
+                            '{LLM_ENDPOINT}',
+                            CONCAT(
+                                'You are a Goldman Sachs wealth advisor analyst reviewing an SEC filing.\\n\\n',
+                                'Return a JSON array of 1–4 distinct investment signals found in this document. ',
+                                'Each element must have exactly these five fields:\\n',
+                                '  signal_type  — one of: Earnings Beat, Earnings Miss, Earnings In-Line, ',
+                                'Guidance Change, Credit Event, M&A, Management Change, ',
+                                'Regulatory Action, Capital Action, Risk Disclosure, Operational Update\\n',
+                                '  sentiment    — Positive, Negative, or Neutral for THIS signal specifically\\n',
+                                '  signal_value — High, Medium, or Low\\n',
+                                '  advisor_action_needed — true or false\\n',
+                                '  rationale — 1-2 sentences on the investment implication for a UHNW advisor. ',
+                                'Be specific with numbers when available.\\n\\n',
+                                'Signal type definitions:\\n',
+                                '  Earnings Beat/Miss/In-Line: any filing disclosing financial results — ',
+                                'always use the specific label, never a generic Earnings\\n',
+                                '  Guidance Change: net company-level EPS or net income direction — ',
+                                'emit ONE signal, assess net impact. If overall guidance is lower it is Negative ',
+                                'even when individual segments are guided higher\\n',
+                                '  Credit Event: HIGHEST PRIORITY for BDCs — any non-accrual designation, ',
+                                'PIK interest toggle, NAV per share decline, covenant breach, credit rating ',
+                                'change, or debt restructuring\\n',
+                                '  M&A: merger, acquisition, divestiture, spin-off, or major strategic transaction\\n',
+                                '  Management Change: CEO, CFO, CIO, or board-level departure or appointment\\n',
+                                '  Regulatory Action: SEC/DOJ/CFTC enforcement, investigation, fine, or ',
+                                'material compliance failure\\n',
+                                '  Capital Action: debt issuance, share buyback, dividend policy change, or ',
+                                'rights offering — especially important for BDC 424B prospectus supplements ',
+                                'which signal capital raises that may indicate stress or dilution\\n',
+                                '  Risk Disclosure: new or materially heightened risk factors (10-K focused)\\n',
+                                '  Operational Update: strategic change, restructuring, new product or market\\n\\n',
+                                'Sentiment rules:\\n',
+                                '  Positive: Earnings Beat, Guidance Change (up), M&A (strategic positive), ',
+                                'Capital Action (buyback or dividend raise)\\n',
+                                '  Negative: Earnings Miss, Credit Event, Guidance Change (down), ',
+                                'Regulatory Action, Management Change (sudden unplanned departure), ',
+                                'Capital Action (BDC dilutive equity raise or high-cost debt)\\n',
+                                '  Neutral: Earnings In-Line, Risk Disclosure, Operational Update, ',
+                                'Management Change (planned succession)\\n\\n',
+                                'advisor_action_needed rules — set true ONLY for:\\n',
+                                '  (a) BDC Credit Event: non-accrual, PIK toggle, or NAV decline ≥5%\\n',
+                                '  (b) Earnings Miss ≥10% below prior expectations or consensus\\n',
+                                '  (c) Sudden CEO or CFO departure (not announced retirement or succession)\\n',
+                                '  (d) Regulatory Action with a material fine, enforcement order, or ',
+                                'restriction on business activities\\n',
+                                '  (e) M&A where the issuer is the primary acquiree or is making a ',
+                                'transformative acquisition\\n',
+                                '  (f) Guidance Change where company-level EPS or net income is cut ≥15%\\n',
+                                '  NOT for: routine 10-K annual reports, in-line results, minor regulatory ',
+                                'matters, planned leadership transitions, or ordinary capital raises\\n\\n',
+                                'Form type context:\\n',
+                                '  8-K: event-driven — classify the specific triggering event, not the form\\n',
+                                '  10-K: annual — focus on MDA financial performance, guidance, and material ',
+                                'new risk factors; credit quality summary is critical for BDCs\\n',
+                                '  10-Q: quarterly — same as 10-K but narrower; focus on quarter-specific results\\n',
+                                '  424B2/424B5: BDC prospectus supplement — classify as Capital Action; ',
+                                'flag High if the raise suggests capital stress or significant dilution\\n\\n',
+                                'Only include signals clearly present in the document — do not pad. ',
+                                'Return ONLY the JSON array, no markdown, no surrounding text.\\n\\n',
+                                context_text
+                            )
+                        ),
+                        '```json|```', ''
+                    )) AS signals_json
                 FROM context
+            ),
+
+            -- ── Explode JSON array into one row per signal ─────────────────────────
+            exploded AS (
+                SELECT
+                    e.symbol, e.form_type, e.filing_date, e.accession,
+                    pv.pos,
+                    pv.sig
+                FROM extracted e
+                LATERAL VIEW posexplode(
+                    from_json(
+                        e.signals_json,
+                        'ARRAY<STRUCT<signal_type:STRING, sentiment:STRING, signal_value:STRING, advisor_action_needed:BOOLEAN, rationale:STRING>>'
+                    )
+                ) pv AS pos, sig
+                WHERE pv.sig IS NOT NULL
+                  AND pv.sig.signal_type IS NOT NULL
+                  AND pv.sig.rationale   IS NOT NULL
+                  AND pv.sig.signal_value IN ('High', 'Medium', 'Low')
             )
 
             SELECT
-                md5(CONCAT(symbol, '|', accession))       AS signal_id,
+                md5(CONCAT(symbol, '|', accession, '|', CAST(pos AS STRING)))  AS signal_id,
                 symbol,
-                TRY_CAST(filing_date AS DATE)              AS signal_date,
-                'sec_filing'                               AS source_type,
-                CONCAT(form_type, ' — ', filing_date)      AS source_description,
-                INITCAP(COALESCE(sentiment_raw, 'neutral')) AS sentiment,
-                CASE severity_raw:response[0]::STRING
+                TRY_CAST(filing_date AS DATE)                                   AS signal_date,
+                'sec_filing'                                                    AS source_type,
+                CONCAT(form_type, ' — ', filing_date)                          AS source_description,
+                INITCAP(COALESCE(sig.sentiment, 'neutral'))                     AS sentiment,
+                CASE sig.signal_value
                     WHEN 'High'   THEN 0.9
                     WHEN 'Medium' THEN 0.5
                     WHEN 'Low'    THEN 0.2
                     ELSE 0.3
-                END                                        AS severity_score,
-                CASE WHEN severity_raw:response[0]::STRING = 'High'
-                      AND signal_type_raw:response[0]::STRING
-                          IN ('Credit Event', 'Earnings', 'M&A', 'Management Change', 'Guidance')
-                     THEN true
-                     ELSE false
-                END                                        AS advisor_action_needed,
-                COALESCE(signal_type_raw:response[0]::STRING, 'Other') AS signal_type,
-                form_type                                  AS signal,
-                severity_raw:response[0]::STRING           AS signal_value,
-                rationale,
-                CURRENT_TIMESTAMP()                        AS processed_at
-            FROM signals
+                END                                                             AS severity_score,
+                COALESCE(sig.advisor_action_needed, false)                      AS advisor_action_needed,
+                sig.signal_type                                                 AS signal_type,
+                sig.signal_type                                                 AS signal,
+                sig.signal_value                                                AS signal_value,
+                sig.rationale                                                   AS rationale,
+                CURRENT_TIMESTAMP()                                             AS processed_at
+            FROM exploded
 
         ) AS src
         ON tgt.signal_id = src.signal_id
@@ -244,17 +300,18 @@ else:
             src.signal_type, src.signal, src.signal_value, src.rationale, src.processed_at
         )
     """)
-    print(f"Merged {new_count} SEC filing signals into gold_unified_signals.")
+    print(f"Merged signals from {new_count} SEC filings into gold_unified_signals.")
 
 # COMMAND ----------
 
 display(
     spark.sql(f"""
-        SELECT symbol, signal_date, source_description, sentiment, severity_score,
-               advisor_action_needed, signal_type, LEFT(rationale, 200) AS rationale_preview
+        SELECT symbol, signal_date, source_description, signal_type, signal_value,
+               advisor_action_needed, sentiment, severity_score,
+               LEFT(rationale, 250) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
         WHERE source_type = 'sec_filing'
-        ORDER BY processed_at DESC, severity_score DESC
+        ORDER BY symbol, signal_date DESC, severity_score DESC
     """)
 )
 
