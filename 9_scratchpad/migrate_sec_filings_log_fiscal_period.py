@@ -107,6 +107,53 @@ print("10-K / 10-Q update complete.")
 
 # COMMAND ----------
 
+# ── STEP 2b: Fallback for 10-K/10-Q where filingDate didn't match ────────────
+# Some 10-K filings are submitted before FMP updates the income statement record,
+# so the exact filingDate join in Step 2 misses them (e.g. ARCC's annual 10-K is
+# filed in February but FMP records Q4's filingDate in March after the 10-Q drops).
+# Fix: apply the nearest-prior-quarter approach to any 10-K/10-Q still NULL.
+
+result = spark.sql("""
+    MERGE INTO sec_filings_log AS log
+    USING (
+        SELECT symbol, accession, fiscal_year, quarter
+        FROM (
+            SELECT
+                l.symbol,
+                l.accession,
+                i.fiscalYear AS fiscal_year,
+                CASE i.period
+                    WHEN 'Q1' THEN 1
+                    WHEN 'Q2' THEN 2
+                    WHEN 'Q3' THEN 3
+                    WHEN 'Q4' THEN 4
+                    WHEN 'FY' THEN 4
+                    ELSE NULL
+                END          AS quarter,
+                ROW_NUMBER() OVER (
+                    PARTITION BY l.symbol, l.accession
+                    ORDER BY i.date DESC
+                ) AS rn
+            FROM sec_filings_log l
+            JOIN bronze_income_statements i
+              ON  l.symbol = i.symbol
+              AND CAST(l.filing_date AS DATE) >= i.date
+            WHERE l.form_type IN ('10-K', '10-Q')
+              AND l.fiscal_year IS NULL
+        )
+        WHERE rn = 1
+    ) AS src
+    ON  log.symbol    = src.symbol
+    AND log.accession = src.accession
+    WHEN MATCHED AND log.fiscal_year IS NULL THEN
+        UPDATE SET
+            log.fiscal_year = src.fiscal_year,
+            log.quarter     = src.quarter
+""")
+print("10-K / 10-Q fallback (nearest prior quarter) complete.")
+
+# COMMAND ----------
+
 # ── STEP 3: Populate 8-K, 424B2, 424B5 via nearest prior quarter ──────────────
 # Event-driven filings don't have a direct income statement counterpart.
 # We assign the most recent period whose end date falls on or before the filing date.
@@ -187,12 +234,73 @@ display(spark.sql("""
 # COMMAND ----------
 
 # ── STEP 6: Confirm still_null rows (if any) ─────────────────────────────────
-# These are filings for tickers that don't appear in bronze_income_statements.
-# They will be auto-populated by 05_sec_filings.py on the next monthly run.
 
 display(spark.sql("""
     SELECT symbol, form_type, filing_date, filename
     FROM sec_filings_log
     WHERE fiscal_year IS NULL
+    ORDER BY symbol, filing_date DESC
+"""))
+
+# COMMAND ----------
+
+# ── STEP 7: Patch AINV manually ───────────────────────────────────────────────
+# AINV (Morgan Stanley Investment Management) has a March 31 fiscal year-end and
+# is not present in bronze_income_statements (tracked via EDGAR XBRL only, not FMP).
+# Fiscal year convention: FY ends March 31, so quarters are:
+#   Q1 = Apr–Jun, Q2 = Jul–Sep, Q3 = Oct–Dec, Q4 = Jan–Mar
+#
+# The mapping below derives quarter from filing month using AINV's fiscal calendar.
+# Filing month → fiscal quarter:
+#   Jan, Feb, Mar  (during/after Q4 Jan-Mar)  → Q4 of prior FY
+#   Apr, May, Jun  (after Q1 Apr-Jun end)      → Q1
+#   Jul, Aug, Sep  (after Q2 Jul-Sep end)      → Q2
+#   Oct, Nov, Dec  (after Q3 Oct-Dec end)      → Q3
+#
+# For annual 10-K (filed ~May/Jun after March year-end):
+#   → fiscal_year = year of the March year-end, quarter = 4
+
+spark.sql("""
+    MERGE INTO sec_filings_log AS log
+    USING (
+        SELECT
+            symbol,
+            accession,
+            CASE
+                WHEN form_type = '10-K' THEN
+                    CAST(YEAR(CAST(filing_date AS DATE)) AS STRING)
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (4, 5, 6)  THEN
+                    CAST(YEAR(CAST(filing_date AS DATE)) AS STRING)
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (7, 8, 9)  THEN
+                    CAST(YEAR(CAST(filing_date AS DATE)) AS STRING)
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (10,11,12) THEN
+                    CAST(YEAR(CAST(filing_date AS DATE)) + 1 AS STRING)
+                ELSE
+                    CAST(YEAR(CAST(filing_date AS DATE)) AS STRING)
+            END AS fiscal_year,
+            CASE
+                WHEN form_type = '10-K'                                          THEN 4
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (4, 5, 6)               THEN 1
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (7, 8, 9)               THEN 2
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (10, 11, 12)            THEN 3
+                WHEN MONTH(CAST(filing_date AS DATE)) IN (1, 2, 3)               THEN 4
+            END AS quarter
+        FROM sec_filings_log
+        WHERE symbol = 'AINV'
+          AND fiscal_year IS NULL
+    ) AS src
+    ON  log.symbol    = src.symbol
+    AND log.accession = src.accession
+    WHEN MATCHED AND log.fiscal_year IS NULL THEN
+        UPDATE SET
+            log.fiscal_year = src.fiscal_year,
+            log.quarter     = src.quarter
+""")
+print("AINV patch complete.")
+
+# Verify AINV
+display(spark.sql("""
+    SELECT symbol, form_type, filing_date, fiscal_year, quarter
+    FROM sec_filings_log WHERE symbol = 'AINV'
     ORDER BY filing_date DESC
 """))
