@@ -11,10 +11,21 @@
 # Query 1 — Signal Feed: one row per signal, with company metadata and numeric sentiment score.
 #   Use this for time-series charts, signal type breakdowns, sentiment trends.
 #
-# Query 2 — Exposure: one row per (signal × account). Fans out intentionally.
+# Query 2 — Exposure: one row per (account × ticker × source_type × signal_type × advisor_action_needed).
+#   Signal filters are pushed into the subquery so only matching signals drive the join.
 #   Use this to answer "which advisors/clients are exposed to negative signals right now."
 #
-# Use :date.min / :date.max to scope both queries to a signal window.
+# Lakeview parameters (all optional unless noted):
+#   :date.min             — signal window start  (date range widget, applied to both queries)
+#   :date.max             — signal window end    (date range widget, applied to both queries)
+#   :symbol               — ticker symbol        (multi-select)
+#   :sector               — GICS sector          (multi-select)
+#   :source_type          — signal source        (multi-select: news, bdc_early_warning, earnings_transcript, sec_filing_*)
+#   :signal_type          — signal type label    (multi-select)
+#   :advisor_action_needed — true / false        (single-select)
+#   :advisor_id           — advisor ID           (multi-select, Exposure query only)
+#   :account_type         — account type         (multi-select, Exposure query only)
+#   :tier                 — client tier          (multi-select, Exposure query only)
 
 # COMMAND ----------
 
@@ -59,6 +70,14 @@
 # MAGIC   g.rationale
 # MAGIC FROM gold_unified_signals g
 # MAGIC LEFT JOIN bronze_company_profiles cp ON g.symbol = cp.symbol
+# MAGIC WHERE
+# MAGIC   (g.signal_date >= :date.min             OR :date.min             IS NULL)
+# MAGIC   AND (g.signal_date <= :date.max         OR :date.max             IS NULL)
+# MAGIC   AND (array_contains(:symbol,      g.symbol)      OR :symbol      IS NULL)
+# MAGIC   AND (array_contains(:source_type, g.source_type) OR :source_type IS NULL)
+# MAGIC   AND (array_contains(:signal_type, g.signal_type) OR :signal_type IS NULL)
+# MAGIC   AND (array_contains(:sector,      cp.sector)     OR :sector      IS NULL)
+# MAGIC   AND (:advisor_action_needed IS NULL OR g.advisor_action_needed = :advisor_action_needed)
 # MAGIC ORDER BY g.signal_date DESC
 
 # COMMAND ----------
@@ -113,7 +132,18 @@
 # MAGIC     SUM(CASE WHEN signal_value = 'High' THEN 1 ELSE 0 END)          AS high_severity_count,
 # MAGIC     MAX(signal_date)                                                  AS latest_signal_date
 # MAGIC   FROM gold_unified_signals
-# MAGIC   WHERE signal_date BETWEEN :date.min AND :date.max
+# MAGIC   WHERE
+# MAGIC     (signal_date >= :date.min             OR :date.min             IS NULL)
+# MAGIC     AND (signal_date <= :date.max         OR :date.max             IS NULL)
+# MAGIC     AND (array_contains(:source_type, source_type) OR :source_type IS NULL)
+# MAGIC     AND (array_contains(:signal_type, signal_type) OR :signal_type IS NULL)
+# MAGIC     AND (:advisor_action_needed IS NULL OR advisor_action_needed = :advisor_action_needed)
 # MAGIC   GROUP BY symbol, source_type, signal_type, advisor_action_needed
 # MAGIC ) s ON h.ticker = s.symbol
+# MAGIC WHERE
+# MAGIC   (array_contains(:symbol,       h.ticker)       OR :symbol       IS NULL)
+# MAGIC   AND (array_contains(:sector,   cp.sector)      OR :sector       IS NULL)
+# MAGIC   AND (array_contains(:advisor_id,    c.advisor_id)    OR :advisor_id    IS NULL)
+# MAGIC   AND (array_contains(:account_type,  a.account_type)  OR :account_type  IS NULL)
+# MAGIC   AND (array_contains(:tier,          c.tier)          OR :tier          IS NULL)
 # MAGIC ORDER BY s.advisor_action_needed DESC, s.net_sentiment_score ASC
