@@ -32,19 +32,25 @@
 # MAGIC %sql
 # MAGIC SELECT
 # MAGIC   g.signal_id,
-# MAGIC   g.signal_date,
+# MAGIC   g.signal_date                                                         AS date,
 # MAGIC   g.symbol,
 # MAGIC   cp.companyName,
 # MAGIC   cp.sector,
 # MAGIC   g.source_type,
+# MAGIC   CASE
+# MAGIC     WHEN g.source_type LIKE 'sec_filing_%'
+# MAGIC       THEN CONCAT('SEC Filing (', SUBSTRING(g.source_type, 12), ')')
+# MAGIC     WHEN g.source_type = 'news'                THEN 'News'
+# MAGIC     WHEN g.source_type = 'bdc_early_warning'   THEN 'BDC Early Warning'
+# MAGIC     WHEN g.source_type = 'earnings_transcript' THEN 'Earnings Transcript'
+# MAGIC     ELSE INITCAP(REPLACE(g.source_type, '_', ' '))
+# MAGIC   END                                                                   AS source_type_display,
 # MAGIC   g.signal_type,
 # MAGIC   g.sentiment,
-# MAGIC   CASE g.sentiment
-# MAGIC     WHEN 'Positive' THEN  1.0
-# MAGIC     WHEN 'Negative' THEN -1.0
-# MAGIC     WHEN 'Mixed'    THEN -0.5
-# MAGIC     WHEN 'Neutral'  THEN  0.0
-# MAGIC   END                      AS sentiment_score,
+# MAGIC   CASE WHEN g.sentiment = 'Positive' THEN  1.0  ELSE 0 END             AS positive,
+# MAGIC   CASE WHEN g.sentiment = 'Mixed'    THEN -0.5  ELSE 0 END             AS mixed,
+# MAGIC   CASE WHEN g.sentiment = 'Neutral'  THEN  0.0  ELSE 0 END             AS neutral,
+# MAGIC   CASE WHEN g.sentiment = 'Negative' THEN -1.0  ELSE 0 END             AS negative,
 # MAGIC   g.severity_score,
 # MAGIC   g.signal_value,
 # MAGIC   g.advisor_action_needed,
@@ -61,19 +67,25 @@
 # MAGIC %sql
 # MAGIC SELECT
 # MAGIC   g.signal_id,
-# MAGIC   g.signal_date,
+# MAGIC   g.signal_date                                                         AS date,
 # MAGIC   g.symbol,
 # MAGIC   cp.companyName,
 # MAGIC   cp.sector,
 # MAGIC   g.source_type,
+# MAGIC   CASE
+# MAGIC     WHEN g.source_type LIKE 'sec_filing_%'
+# MAGIC       THEN CONCAT('SEC Filing (', SUBSTRING(g.source_type, 12), ')')
+# MAGIC     WHEN g.source_type = 'news'                THEN 'News'
+# MAGIC     WHEN g.source_type = 'bdc_early_warning'   THEN 'BDC Early Warning'
+# MAGIC     WHEN g.source_type = 'earnings_transcript' THEN 'Earnings Transcript'
+# MAGIC     ELSE INITCAP(REPLACE(g.source_type, '_', ' '))
+# MAGIC   END                                                                   AS source_type_display,
 # MAGIC   g.signal_type,
 # MAGIC   g.sentiment,
-# MAGIC   CASE g.sentiment
-# MAGIC     WHEN 'Positive' THEN  1.0
-# MAGIC     WHEN 'Negative' THEN -1.0
-# MAGIC     WHEN 'Mixed'    THEN -0.5
-# MAGIC     WHEN 'Neutral'  THEN  0.0
-# MAGIC   END                      AS sentiment_score,
+# MAGIC   CASE WHEN g.sentiment = 'Positive' THEN  1.0  ELSE 0 END             AS positive,
+# MAGIC   CASE WHEN g.sentiment = 'Mixed'    THEN -0.5  ELSE 0 END             AS mixed,
+# MAGIC   CASE WHEN g.sentiment = 'Neutral'  THEN  0.0  ELSE 0 END             AS neutral,
+# MAGIC   CASE WHEN g.sentiment = 'Negative' THEN -1.0  ELSE 0 END             AS negative,
 # MAGIC   g.severity_score,
 # MAGIC   g.signal_value,
 # MAGIC   g.advisor_action_needed,
