@@ -78,7 +78,8 @@ spark.sql(f"""
         total_chunks  INT,
         chunk_text    STRING,
         char_count    INT,
-        ingested_at   TIMESTAMP
+        ingested_at   TIMESTAMP,
+        doc_uri       STRING
     )
     USING DELTA
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
@@ -165,6 +166,7 @@ CHUNK_SCHEMA = StructType([
     StructField("total_chunks", IntegerType(), True),
     StructField("chunk_text",   StringType(),  True),
     StructField("char_count",   IntegerType(), True),
+    StructField("doc_uri",      StringType(),  True),
 ])
 
 
@@ -275,7 +277,10 @@ def _chunk_transcripts(iterator):
             sections  = split_sections(content)
             all_rows  = []
             global_idx = 0
+            title = row.get("title") or f"{row['symbol']} Q{row['quarter']} {row['year']} Earnings Call"
             for section_name, section_text in sections:
+                section_display = section_name.replace("_", " ").title()
+                doc_uri = f"{title} | {section_display}"
                 for chunk_text in fixed_chunk(section_text):
                     all_rows.append({
                         "chunk_id":     f"{row['symbol']}|Q{row['quarter']}|{row['year']}|{section_name}|{global_idx}",
@@ -290,6 +295,7 @@ def _chunk_transcripts(iterator):
                         "total_chunks": 0,   # backfilled below
                         "chunk_text":   chunk_text,
                         "char_count":   len(chunk_text),
+                        "doc_uri":      doc_uri,
                     })
                     global_idx += 1
 
@@ -335,7 +341,8 @@ try:
             tgt.chunk_text   = src.chunk_text,
             tgt.char_count   = src.char_count,
             tgt.total_chunks = src.total_chunks,
-            tgt.ingested_at  = src.ingested_at
+            tgt.ingested_at  = src.ingested_at,
+            tgt.doc_uri      = src.doc_uri
         WHEN NOT MATCHED THEN INSERT *
     """)
     print("bronze_transcript_chunks updated.")

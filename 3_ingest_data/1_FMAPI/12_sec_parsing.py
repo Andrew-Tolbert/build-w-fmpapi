@@ -44,7 +44,8 @@ spark.sql(f"""
         chunk_text    STRING,
         char_count    INT,
         parsed_at     TIMESTAMP,
-        is_latest     BOOLEAN
+        is_latest     BOOLEAN,
+        doc_uri       STRING
     ) USING DELTA
     TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
 """)
@@ -170,6 +171,7 @@ CHUNK_SCHEMA = StructType([
     StructField("chunk_index",  IntegerType(), True),
     StructField("chunk_text",   StringType(),  True),
     StructField("char_count",   IntegerType(), True),
+    StructField("doc_uri",      StringType(),  True),
 ])
 
 
@@ -277,6 +279,15 @@ def _parse_batch(iterator):
                 continue
             rows = []
             for section in split_sections(text, row["form_type"]):
+                section_display = section["name"].replace("_", " ").title()
+                fy  = row["fiscal_year"]
+                qtr = row["quarter"]
+                if fy and qtr:
+                    doc_uri = f"{fy} Q{qtr} | {row['form_type']} | {section_display}"
+                elif fy:
+                    doc_uri = f"{fy} | {row['form_type']} | {section_display}"
+                else:
+                    doc_uri = f"Unknown | {row['form_type']} | {section_display}"
                 for idx, chunk_text in enumerate(chunk(section["text"])):
                     rows.append({
                         "chunk_id":     f"{row['accession']}|{section['name']}|{idx}",
@@ -290,6 +301,7 @@ def _parse_batch(iterator):
                         "chunk_index":  idx,
                         "chunk_text":   chunk_text,
                         "char_count":   len(chunk_text),
+                        "doc_uri":      doc_uri,
                     })
             yield pd.DataFrame(rows) if rows else _empty
 
@@ -333,11 +345,11 @@ try:
         WHEN NOT MATCHED THEN INSERT
             (chunk_id, symbol, form_type, filing_date, accession,
              fiscal_year, quarter,
-             section_name, chunk_index, chunk_text, char_count, parsed_at, is_latest)
+             section_name, chunk_index, chunk_text, char_count, parsed_at, is_latest, doc_uri)
         VALUES
             (src.chunk_id, src.symbol, src.form_type, src.filing_date, src.accession,
              src.fiscal_year, src.quarter,
-             src.section_name, src.chunk_index, src.chunk_text, src.char_count, src.parsed_at, false)
+             src.section_name, src.chunk_index, src.chunk_text, src.char_count, src.parsed_at, false, src.doc_uri)
     """)
     print("sec_filing_chunks updated.")
 except Exception as e:
