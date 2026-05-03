@@ -66,15 +66,15 @@
 # MAGIC     symbol,
 # MAGIC     source_type,
 # MAGIC     COUNT(*)                                                            AS signal_count,
-# MAGIC     SUM(CASE WHEN sentiment = 'positive'            THEN 1 ELSE 0 END) AS positive,
-# MAGIC     SUM(CASE WHEN sentiment IN ('neutral', 'mixed') THEN 1 ELSE 0 END) AS neutral,
-# MAGIC     SUM(CASE WHEN sentiment = 'negative'            THEN 1 ELSE 0 END) AS negative,
+# MAGIC     SUM(CASE WHEN sentiment = 'Positive'            THEN 1 ELSE 0 END) AS positive,
+# MAGIC     SUM(CASE WHEN sentiment IN ('Neutral', 'Mixed') THEN 1 ELSE 0 END) AS neutral,
+# MAGIC     SUM(CASE WHEN sentiment = 'Negative'            THEN 1 ELSE 0 END) AS negative,
 # MAGIC     ROUND(
-# MAGIC       SUM(CASE WHEN sentiment = 'negative' THEN 1 ELSE 0 END)
+# MAGIC       SUM(CASE WHEN sentiment = 'Negative' THEN 1 ELSE 0 END)
 # MAGIC       / NULLIF(COUNT(*), 0) * 100, 1)                                  AS pct_negative,
 # MAGIC     ROUND(
-# MAGIC       (SUM(CASE WHEN sentiment = 'positive' THEN 1 ELSE 0 END)
-# MAGIC        - SUM(CASE WHEN sentiment = 'negative' THEN 1 ELSE 0 END))
+# MAGIC       (SUM(CASE WHEN sentiment = 'Positive' THEN 1 ELSE 0 END)
+# MAGIC        - SUM(CASE WHEN sentiment = 'Negative' THEN 1 ELSE 0 END))
 # MAGIC       / NULLIF(COUNT(*), 0), 3)                                        AS net_sentiment_score,
 # MAGIC     SUM(CASE WHEN signal_value = 'High'       THEN 1 ELSE 0 END)      AS high_severity_count,
 # MAGIC     SUM(CASE WHEN advisor_action_needed = true THEN 1 ELSE 0 END)      AS advisor_action_count,
