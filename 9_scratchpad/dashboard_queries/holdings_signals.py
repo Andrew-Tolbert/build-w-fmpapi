@@ -48,6 +48,7 @@
 # MAGIC   s.source_type,
 # MAGIC   s.signal_count,
 # MAGIC   s.positive,
+# MAGIC   s.mixed,
 # MAGIC   s.neutral,
 # MAGIC   s.negative,
 # MAGIC   s.pct_negative,
@@ -65,17 +66,20 @@
 # MAGIC   SELECT
 # MAGIC     symbol,
 # MAGIC     source_type,
-# MAGIC     COUNT(*)                                                            AS signal_count,
-# MAGIC     SUM(CASE WHEN sentiment = 'Positive'            THEN 1 ELSE 0 END) AS positive,
-# MAGIC     SUM(CASE WHEN sentiment IN ('Neutral', 'Mixed') THEN 1 ELSE 0 END) AS neutral,
-# MAGIC     SUM(CASE WHEN sentiment = 'Negative'            THEN 1 ELSE 0 END) AS negative,
+# MAGIC     COUNT(*)                                                             AS signal_count,
+# MAGIC     SUM(CASE WHEN sentiment = 'Positive' THEN 1    ELSE 0 END)          AS positive,
+# MAGIC     SUM(CASE WHEN sentiment = 'Mixed'    THEN -0.5 ELSE 0 END)          AS mixed,
+# MAGIC     SUM(CASE WHEN sentiment = 'Neutral'  THEN 0    ELSE 0 END)          AS neutral,
+# MAGIC     SUM(CASE WHEN sentiment = 'Negative' THEN -1   ELSE 0 END)          AS negative,
 # MAGIC     ROUND(
-# MAGIC       SUM(CASE WHEN sentiment = 'Negative' THEN 1 ELSE 0 END)
-# MAGIC       / NULLIF(COUNT(*), 0) * 100, 1)                                  AS pct_negative,
+# MAGIC       (ABS(SUM(CASE WHEN sentiment = 'Negative' THEN -1   ELSE 0 END))
+# MAGIC        + ABS(SUM(CASE WHEN sentiment = 'Mixed'  THEN -0.5 ELSE 0 END)))
+# MAGIC       / NULLIF(COUNT(*), 0) * 100, 1)                                   AS pct_negative,
 # MAGIC     ROUND(
-# MAGIC       (SUM(CASE WHEN sentiment = 'Positive' THEN 1 ELSE 0 END)
-# MAGIC        - SUM(CASE WHEN sentiment = 'Negative' THEN 1 ELSE 0 END))
-# MAGIC       / NULLIF(COUNT(*), 0), 3)                                        AS net_sentiment_score,
+# MAGIC       (SUM(CASE WHEN sentiment = 'Positive' THEN 1    ELSE 0 END)
+# MAGIC        + SUM(CASE WHEN sentiment = 'Mixed'  THEN -0.5 ELSE 0 END)
+# MAGIC        + SUM(CASE WHEN sentiment = 'Negative' THEN -1  ELSE 0 END))
+# MAGIC       / NULLIF(COUNT(*), 0), 3)                                         AS net_sentiment_score,
 # MAGIC     SUM(CASE WHEN signal_value = 'High'       THEN 1 ELSE 0 END)      AS high_severity_count,
 # MAGIC     SUM(CASE WHEN advisor_action_needed = true THEN 1 ELSE 0 END)      AS advisor_action_count,
 # MAGIC     ARRAY_JOIN(ARRAY_SORT(COLLECT_SET(signal_type)), ', ')             AS signal_types,
