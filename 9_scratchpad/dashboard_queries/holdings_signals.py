@@ -59,7 +59,6 @@
 # MAGIC   g.rationale
 # MAGIC FROM gold_unified_signals g
 # MAGIC LEFT JOIN bronze_company_profiles cp ON g.symbol = cp.symbol
-# MAGIC WHERE g.signal_date BETWEEN :date.min AND :date.max
 # MAGIC ORDER BY g.signal_date DESC
 
 # COMMAND ----------
