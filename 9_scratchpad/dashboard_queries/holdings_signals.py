@@ -29,7 +29,7 @@
 
 # DBTITLE 1,[LAKEVIEW] Holdings × Signals
 # MAGIC %sql
-# MAGIC SELECT
+# MAGIC SELECT DISTINCT
 # MAGIC   h.ticker,
 # MAGIC   h.account_id,
 # MAGIC   a.account_name,
@@ -39,7 +39,6 @@
 # MAGIC   c.advisor_id,
 # MAGIC   c.tier,
 # MAGIC   c.risk_profile,
-# MAGIC   ROUND(SUM(h.market_value), 2)  AS total_market_value,
 # MAGIC
 # MAGIC   -- Company metadata
 # MAGIC   cp.companyName,
@@ -87,12 +86,4 @@
 # MAGIC   GROUP BY symbol, source_type
 # MAGIC ) s ON h.ticker = s.symbol
 # MAGIC
-# MAGIC GROUP BY
-# MAGIC   h.ticker, h.account_id, a.account_name, a.account_type,
-# MAGIC   c.client_id, c.client_name, c.advisor_id, c.tier, c.risk_profile,
-# MAGIC   cp.companyName, cp.sector,
-# MAGIC   s.source_type, s.signal_count, s.positive, s.neutral,
-# MAGIC   s.negative, s.pct_negative, s.net_sentiment_score,
-# MAGIC   s.high_severity_count, s.advisor_action_count,
-# MAGIC   s.signal_types, s.latest_signal_date
-# MAGIC ORDER BY s.negative DESC, total_market_value DESC
+# MAGIC ORDER BY s.negative DESC
