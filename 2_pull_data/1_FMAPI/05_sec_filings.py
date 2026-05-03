@@ -45,6 +45,8 @@ spark.sql(f"""
         form_type     STRING,
         accession     STRING,
         filing_date   STRING,
+        fiscal_year   STRING,
+        quarter       INT,
         link          STRING,
         final_link    STRING,
         subdir        STRING,
@@ -60,6 +62,59 @@ def _accession_id(url: str) -> str:
     """Extract the 18-digit EDGAR accession number from a filing URL."""
     m = re.search(r"/(\d{18})/", url or "")
     return m.group(1) if m else "NOACC"
+
+
+_PERIOD_TO_QUARTER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 4}
+
+# Pre-load fiscal period mapping from bronze_income_statements once per run.
+# One Spark scan instead of one query per filing — ~100x faster for a full batch.
+#
+# _filing_date_to_period: (symbol, filingDate) -> (fiscalYear, quarter)
+#   Used for 10-K and 10-Q — the income statement records the exact SEC filing date.
+#
+# _period_by_symbol: symbol -> [(period_end_date, fiscalYear, quarter), ...]  sorted DESC
+#   Used for 8-K, 424B2, 424B5 — find the most recent period whose end date is
+#   on or before the filing date (the quarter the event occurred in).
+
+_filing_date_to_period = {}
+_period_by_symbol      = {}
+
+for row in spark.sql(f"""
+    SELECT symbol, filingDate, date, fiscalYear, period
+    FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_income_statements
+    WHERE fiscalYear IS NOT NULL
+""").collect():
+    sym = row["symbol"]
+    fy  = row["fiscalYear"]
+    qtr = _PERIOD_TO_QUARTER.get(row["period"])
+    if row["filingDate"]:
+        _filing_date_to_period[(sym, row["filingDate"])] = (fy, qtr)
+    if sym not in _period_by_symbol:
+        _period_by_symbol[sym] = []
+    _period_by_symbol[sym].append((row["date"], fy, qtr))
+
+# Sort each symbol's list newest-first so the first match is the most recent
+for sym in _period_by_symbol:
+    _period_by_symbol[sym].sort(key=lambda x: x[0], reverse=True)
+
+print(f"Loaded fiscal period map: {len(_filing_date_to_period)} filingDate entries, {len(_period_by_symbol)} symbols")
+
+
+def _get_fiscal_period(ticker: str, filing_date: str, form_type: str):
+    """Return (fiscal_year, quarter) from the pre-loaded mapping — no Spark calls.
+
+    10-K / 10-Q: exact filingDate match from bronze_income_statements.
+    8-K / 424Bx: nearest prior quarter (most recent period end <= filing_date).
+    Returns (None, None) when no match exists (ticker not in income statements).
+    """
+    if form_type in ("10-K", "10-Q"):
+        return _filing_date_to_period.get((ticker, filing_date), (None, None))
+
+    periods = _period_by_symbol.get(ticker, [])
+    for period_end, fy, qtr in periods:
+        if str(period_end) <= filing_date:
+            return fy, qtr
+    return None, None
 
 
 out_base  = volume_subdir("sec_filings")
@@ -119,7 +174,11 @@ for ticker in get_tickers(types=["equity", "private_credit"]):
 
         with open(dest, "w", encoding="utf-8") as f:
             f.write(text)
-        print(f"  {ticker} {ftype} {filing_date}: written {subdir}/{ticker}/{filename}")
+
+        fiscal_year, quarter = _get_fiscal_period(ticker, filing_date, ftype)
+        _fy_sql  = f"'{fiscal_year}'" if fiscal_year else "NULL"
+        _qtr_sql = str(quarter)       if quarter     else "NULL"
+        print(f"  {ticker} {ftype} {filing_date}: written {subdir}/{ticker}/{filename} (fy={fiscal_year} q={quarter})")
 
         spark.sql(f"""
             MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.sec_filings_log AS log
@@ -129,6 +188,8 @@ for ticker in get_tickers(types=["equity", "private_credit"]):
                     '{ftype}'       AS form_type,
                     '{accession}'   AS accession,
                     '{filing_date}' AS filing_date,
+                    {_fy_sql}       AS fiscal_year,
+                    {_qtr_sql}      AS quarter,
                     '{link}'        AS link,
                     '{final_link}'  AS final_link,
                     '{subdir}'      AS subdir,
@@ -139,6 +200,8 @@ for ticker in get_tickers(types=["equity", "private_credit"]):
             AND log.accession = src.accession
             WHEN MATCHED THEN
                 UPDATE SET
+                    log.fiscal_year   = src.fiscal_year,
+                    log.quarter       = src.quarter,
                     log.final_link    = src.final_link,
                     log.subdir        = src.subdir,
                     log.filename      = src.filename,
