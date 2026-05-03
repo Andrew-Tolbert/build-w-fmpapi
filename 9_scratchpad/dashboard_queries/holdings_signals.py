@@ -8,10 +8,10 @@
 # ///
 # Holdings × Unified Signals
 #
-# One row per (account × ticker × source_type) that has signal coverage in the date window.
-# Signals are pre-aggregated per (ticker × source_type) in a subquery then joined to holdings,
+# One row per (account × ticker × source_type × signal_type) with signal coverage in the date window.
+# Signals are pre-aggregated per (ticker × source_type × signal_type) in a subquery then joined to holdings,
 # so signal metrics repeat cleanly across client/account rows without duplication.
-# Filter by source_type in Lakeview to scope to news, sec_filings, earnings, bdc, etc.
+# Filter by source_type or signal_type in Lakeview to scope the view.
 #
 # Use :date.min / :date.max to scope the signal window.
 
@@ -29,7 +29,8 @@
 
 # DBTITLE 1,[LAKEVIEW] Holdings × Signals
 # MAGIC %sql
-# MAGIC SELECT DISTINCT
+# MAGIC SELECT
+# MAGIC   s.latest_signal_date AS date,
 # MAGIC   h.ticker,
 # MAGIC   h.account_id,
 # MAGIC   a.account_name,
@@ -55,8 +56,7 @@
 # MAGIC   s.pct_negative,
 # MAGIC   s.net_sentiment_score,
 # MAGIC   s.high_severity_count,
-# MAGIC   s.advisor_action_count,
-# MAGIC   s.latest_signal_date
+# MAGIC   s.advisor_action_count
 # MAGIC
 # MAGIC FROM holdings h
 # MAGIC JOIN accounts a ON h.account_id = a.account_id
@@ -81,13 +81,13 @@
 # MAGIC        + SUM(CASE WHEN sentiment = 'Mixed'  THEN -0.5 ELSE 0 END)
 # MAGIC        + SUM(CASE WHEN sentiment = 'Negative' THEN -1  ELSE 0 END))
 # MAGIC       / NULLIF(COUNT(*), 0), 3)                                         AS net_sentiment_score,
-# MAGIC     SUM(CASE WHEN signal_value = 'High'       THEN 1 ELSE 0 END)      AS high_severity_count,
-# MAGIC     SUM(CASE WHEN advisor_action_needed = true THEN 1 ELSE 0 END)      AS advisor_action_count,
-# MAGIC     MAX(signal_date)                                                    AS latest_signal_date
+# MAGIC     SUM(CASE WHEN signal_value = 'High'       THEN 1 ELSE 0 END)        AS high_severity_count,
+# MAGIC     SUM(CASE WHEN advisor_action_needed = true THEN 1 ELSE 0 END)        AS advisor_action_count,
+# MAGIC     MAX(signal_date)                                                      AS latest_signal_date
 # MAGIC   FROM gold_unified_signals
 # MAGIC   WHERE signal_type IS NOT NULL
 # MAGIC     AND signal_date BETWEEN :date.min AND :date.max
 # MAGIC   GROUP BY symbol, source_type, signal_type
 # MAGIC ) s ON h.ticker = s.symbol
 # MAGIC
-# MAGIC ORDER BY s.negative DESC
+# MAGIC ORDER BY date DESC
