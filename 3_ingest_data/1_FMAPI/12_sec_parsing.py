@@ -341,7 +341,8 @@ try:
         WHEN MATCHED THEN UPDATE SET
             tgt.chunk_text = src.chunk_text,
             tgt.char_count = src.char_count,
-            tgt.parsed_at  = src.parsed_at
+            tgt.parsed_at  = src.parsed_at,
+            tgt.doc_uri    = src.doc_uri
         WHEN NOT MATCHED THEN INSERT
             (chunk_id, symbol, form_type, filing_date, accession,
              fiscal_year, quarter,
