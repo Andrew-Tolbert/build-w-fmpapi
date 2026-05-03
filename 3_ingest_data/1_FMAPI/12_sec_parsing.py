@@ -37,6 +37,8 @@ spark.sql(f"""
         form_type     STRING,
         filing_date   STRING,
         accession     STRING,
+        fiscal_year   STRING,
+        quarter       INT,
         section_name  STRING,
         chunk_index   INT,
         chunk_text    STRING,
@@ -77,7 +79,7 @@ _dedup_win = Window.partitionBy("accession").orderBy("symbol", "filename")
 
 filings_df = (
     spark.sql(f"""
-        SELECT symbol, form_type, accession, filing_date, subdir, filename
+        SELECT symbol, form_type, accession, filing_date, fiscal_year, quarter, subdir, filename
         FROM   {UC_CATALOG}.{UC_SCHEMA}.sec_filings_log
         WHERE  accession != 'NOACC'
     """)
@@ -162,6 +164,8 @@ CHUNK_SCHEMA = StructType([
     StructField("form_type",    StringType(),  True),
     StructField("filing_date",  StringType(),  True),
     StructField("accession",    StringType(),  True),
+    StructField("fiscal_year",  StringType(),  True),
+    StructField("quarter",      IntegerType(), True),
     StructField("section_name", StringType(),  True),
     StructField("chunk_index",  IntegerType(), True),
     StructField("chunk_text",   StringType(),  True),
@@ -280,6 +284,8 @@ def _parse_batch(iterator):
                         "form_type":    row["form_type"],
                         "filing_date":  row["filing_date"],
                         "accession":    row["accession"],
+                        "fiscal_year":  row["fiscal_year"],
+                        "quarter":      row["quarter"],
                         "section_name": section["name"],
                         "chunk_index":  idx,
                         "chunk_text":   chunk_text,
@@ -326,9 +332,11 @@ try:
             tgt.parsed_at  = src.parsed_at
         WHEN NOT MATCHED THEN INSERT
             (chunk_id, symbol, form_type, filing_date, accession,
+             fiscal_year, quarter,
              section_name, chunk_index, chunk_text, char_count, parsed_at, is_latest)
         VALUES
             (src.chunk_id, src.symbol, src.form_type, src.filing_date, src.accession,
+             src.fiscal_year, src.quarter,
              src.section_name, src.chunk_index, src.chunk_text, src.char_count, src.parsed_at, false)
     """)
     print("sec_filing_chunks updated.")

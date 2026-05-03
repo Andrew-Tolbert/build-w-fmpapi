@@ -304,3 +304,57 @@ display(spark.sql("""
     FROM sec_filings_log WHERE symbol = 'AINV'
     ORDER BY filing_date DESC
 """))
+
+# COMMAND ----------
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DOWNSTREAM — propagate fiscal_year + quarter without reprocessing any data
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# COMMAND ----------
+
+# ── STEP 8: Add columns to sec_filing_chunks ──────────────────────────────────
+# sec_filing_chunks has accession, so the backfill is a clean direct join.
+# ALTER TABLE is metadata-only on Delta — no data rewrite, no reader impact.
+
+spark.sql("ALTER TABLE sec_filing_chunks ADD COLUMNS (fiscal_year STRING, quarter INT)")
+print("sec_filing_chunks: columns added.")
+
+# COMMAND ----------
+
+# ── STEP 9: Backfill sec_filing_chunks ────────────────────────────────────────
+# One row per chunk; all chunks from the same accession get the same period.
+# The UPDATE touches every existing row (all currently NULL), so it rewrites the
+# table once — this is a metadata + data update but does NOT reparse any HTML.
+
+spark.sql("""
+    MERGE INTO sec_filing_chunks AS tgt
+    USING (
+        SELECT DISTINCT c.symbol, c.accession, l.fiscal_year, l.quarter
+        FROM sec_filing_chunks c
+        JOIN sec_filings_log l
+          ON  c.symbol    = l.symbol
+          AND c.accession = l.accession
+        WHERE l.fiscal_year IS NOT NULL
+          AND c.fiscal_year IS NULL
+    ) AS src
+    ON  tgt.symbol    = src.symbol
+    AND tgt.accession = src.accession
+    WHEN MATCHED AND tgt.fiscal_year IS NULL THEN
+        UPDATE SET
+            tgt.fiscal_year = src.fiscal_year,
+            tgt.quarter     = src.quarter
+""")
+print("sec_filing_chunks: backfill complete.")
+
+# COMMAND ----------
+
+display(spark.sql("""
+    SELECT
+        COUNT(*)                                        AS total_chunks,
+        COUNT(fiscal_year)                              AS populated,
+        COUNT(*) - COUNT(fiscal_year)                   AS still_null,
+        ROUND(COUNT(fiscal_year) / COUNT(*) * 100, 1)   AS pct_populated
+    FROM sec_filing_chunks
+"""))
+
