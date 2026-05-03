@@ -54,6 +54,7 @@
 # MAGIC   g.severity_score,
 # MAGIC   g.signal_value,
 # MAGIC   g.advisor_action_needed,
+# MAGIC   CASE WHEN g.advisor_action_needed THEN '⚠️ Action Needed' ELSE '🟩 No Action' END AS advisor_action_display,
 # MAGIC   g.signal,
 # MAGIC   g.rationale
 # MAGIC FROM gold_unified_signals g
