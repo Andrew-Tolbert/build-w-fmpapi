@@ -8,9 +8,9 @@
 # ///
 # Generate Management Tone signals for earnings transcripts and SEC 10-K/8-K filings.
 #
-# Management Tone scores the overall confidence, clarity, and directional posture of
-# management communication on a 0-10 scale (0 = extremely negative/defensive,
-# 10 = extremely positive/confident). The frontend maps this numeric score to display labels.
+# Management Tone is a sentiment probability distribution stored as a JSON array string:
+#   signal_value = "[negative, neutral, positive]"  e.g. "[0.1,0.5,0.4]"
+# The three values sum to 1.0. The frontend maps them to display labels/charts.
 #
 # Sources:
 #   earnings_transcript  — full call (all sections combined), one score per (symbol, year, quarter)
@@ -20,6 +20,11 @@
 # Signal ID construction (guaranteed non-colliding with existing position-based IDs):
 #   transcripts: md5(symbol|year|quarter|management_tone)
 #   SEC filings:  md5(symbol|accession|management_tone)
+#
+# Derived fields from the distribution:
+#   sentiment             — whichever of negative/neutral/positive has the highest weight
+#   severity_score        — driven by the negative weight (>=0.5 → 0.9, >=0.25 → 0.5, else 0.2)
+#   advisor_action_needed — true when negative weight >= 0.5
 #
 # Idempotency: a call/filing is considered processed when its management_tone signal_id exists.
 # Backfill: run once — reads from existing bronze tables, no FMP re-pull or HTML re-parse needed.
@@ -157,6 +162,7 @@ else:
             ),
 
             -- ── One ai_query per call — returns a single JSON object ───────────
+            -- Returns a probability distribution: negative + neutral + positive = 1.0
             extracted AS (
                 SELECT
                     symbol, year, quarter, call_date,
@@ -165,17 +171,21 @@ else:
                             '{LLM_ENDPOINT}',
                             CONCAT(
                                 'You are a Goldman Sachs wealth advisor analyst assessing management communication quality.\\n\\n',
-                                'Score the management tone in this earnings call on a scale of 0 to 10:\\n',
-                                '  10 = extremely positive: confident, specific, credible, forward-looking\\n',
-                                '   7 = positive: generally upbeat, transparent, few hedges\\n',
-                                '   5 = neutral: balanced, neither unusually confident nor defensive\\n',
-                                '   3 = negative: defensive, vague, heavy hedging, walking back expectations\\n',
-                                '   0 = extremely negative: evasive, alarming disclosures, management in crisis mode\\n\\n',
-                                'Assess tone based on: language confidence and specificity, willingness to give ',
-                                'forward guidance, handling of analyst challenges in Q&A, frequency of hedging ',
-                                'language, transparency about problems vs. deflection.\\n\\n',
+                                'Estimate the tone distribution across this earnings call — what proportion of the ',
+                                'communication is negative, neutral, and positive. The three values must sum to 1.0 ',
+                                'and use two decimal places.\\n\\n',
+                                'Negative tone: defensive language, heavy hedging, walking back expectations, ',
+                                'evasiveness, alarming disclosures, inability to answer analyst questions directly.\\n',
+                                'Neutral tone: balanced factual reporting, standard forward-looking language, ',
+                                'routine operational updates with neither strong confidence nor concern.\\n',
+                                'Positive tone: confident and specific guidance, strong results framing, ',
+                                'transparency on upside, credible forward-looking statements, constructive ',
+                                'and direct handling of analyst challenges in Q&A.\\n\\n',
+                                'Assess across: language confidence and specificity, willingness to give forward ',
+                                'guidance, handling of analyst challenges in Q&A, frequency of hedging language, ',
+                                'transparency about problems vs. deflection.\\n\\n',
                                 'Return JSON only — no markdown, no surrounding text:\\n',
-                                '{\"tone_score\": <integer 0-10>, \"rationale\": \"<one concise sentence>\"}\\n\\n',
+                                '{\"negative\": <0.00-1.00>, \"neutral\": <0.00-1.00>, \"positive\": <0.00-1.00>, \"rationale\": \"<one concise sentence>\"}\\n\\n',
                                 context_text
                             )
                         ),
@@ -188,7 +198,7 @@ else:
             parsed AS (
                 SELECT
                     symbol, year, quarter, call_date,
-                    from_json(tone_json, 'STRUCT<tone_score:INT, rationale:STRING>') AS tone
+                    from_json(tone_json, 'STRUCT<negative:DOUBLE, neutral:DOUBLE, positive:DOUBLE, rationale:STRING>') AS tone
                 FROM extracted
             )
 
@@ -199,24 +209,28 @@ else:
                 'earnings_transcript'                                             AS source_type,
                 CONCAT(symbol, ' Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' — Management Tone') AS source_description,
                 CASE
-                    WHEN tone.tone_score >= 7 THEN 'Positive'
-                    WHEN tone.tone_score <= 3 THEN 'Negative'
-                    ELSE                           'Neutral'
+                    WHEN tone.positive >= tone.negative AND tone.positive >= tone.neutral THEN 'Positive'
+                    WHEN tone.negative >= tone.positive AND tone.negative >= tone.neutral THEN 'Negative'
+                    ELSE                                                                       'Neutral'
                 END                                                               AS sentiment,
                 CASE
-                    WHEN tone.tone_score <= 3 THEN 0.9
-                    WHEN tone.tone_score <= 6 THEN 0.5
-                    ELSE                           0.2
+                    WHEN tone.negative >= 0.5  THEN 0.9
+                    WHEN tone.negative >= 0.25 THEN 0.5
+                    ELSE                            0.2
                 END                                                               AS severity_score,
-                tone.tone_score <= 3                                              AS advisor_action_needed,
+                tone.negative >= 0.5                                              AS advisor_action_needed,
                 'Management Tone'                                                 AS signal_type,
                 CONCAT('Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' Management Tone') AS signal,
-                CAST(tone.tone_score AS STRING)                                   AS signal_value,
+                CONCAT('[', CAST(ROUND(tone.negative, 2) AS STRING), ',',
+                            CAST(ROUND(tone.neutral,  2) AS STRING), ',',
+                            CAST(ROUND(tone.positive, 2) AS STRING), ']')         AS signal_value,
                 tone.rationale                                                    AS rationale,
                 CURRENT_TIMESTAMP()                                               AS processed_at
             FROM parsed
-            WHERE tone.tone_score IS NOT NULL
-              AND tone.rationale   IS NOT NULL
+            WHERE tone.negative  IS NOT NULL
+              AND tone.neutral   IS NOT NULL
+              AND tone.positive  IS NOT NULL
+              AND tone.rationale IS NOT NULL
 
         ) AS src
         ON tgt.signal_id = src.signal_id
@@ -315,6 +329,7 @@ else:
             ),
 
             -- ── One ai_query per filing — returns a single JSON object ─────────
+            -- Returns a probability distribution: negative + neutral + positive = 1.0
             extracted AS (
                 SELECT
                     symbol, form_type, filing_date, accession,
@@ -323,20 +338,24 @@ else:
                             '{LLM_ENDPOINT}',
                             CONCAT(
                                 'You are a Goldman Sachs wealth advisor analyst assessing management communication quality.\\n\\n',
-                                'Score the management tone in this SEC filing on a scale of 0 to 10:\\n',
-                                '  10 = extremely positive: confident, specific, credible, forward-looking\\n',
-                                '   7 = positive: generally upbeat, transparent, few hedges\\n',
-                                '   5 = neutral: balanced, neither unusually confident nor defensive\\n',
-                                '   3 = negative: defensive, vague, heavy hedging, walking back expectations\\n',
-                                '   0 = extremely negative: evasive, alarming disclosures, management in crisis mode\\n\\n',
-                                'For 10-K filings, assess tone in the MD&A section — where management discusses ',
-                                'results and outlook. For 8-K filings, assess the tone of the disclosed event ',
-                                'and any management commentary.\\n\\n',
-                                'Assess tone based on: language confidence and specificity, forward-looking guidance ',
-                                'quality, transparency about risks vs. deflection, frequency of boilerplate hedging ',
-                                'language, specificity of financial targets and timelines.\\n\\n',
+                                'Estimate the tone distribution in this SEC filing — what proportion of the management ',
+                                'narrative is negative, neutral, and positive. The three values must sum to 1.0 ',
+                                'and use two decimal places.\\n\\n',
+                                'Negative tone: defensive language, heavy hedging, walking back expectations, ',
+                                'evasiveness, alarming disclosures, excessive boilerplate risk language beyond ',
+                                'standard legal disclaimers.\\n',
+                                'Neutral tone: balanced factual reporting, standard forward-looking disclaimers, ',
+                                'routine disclosures with neither strong confidence nor concern.\\n',
+                                'Positive tone: confident and specific guidance, strong results framing, credible ',
+                                'forward-looking statements, specific financial targets with timelines, ',
+                                'transparency on upside.\\n\\n',
+                                'For 10-K filings, focus on the MD&A section narrative. For 8-K filings, assess ',
+                                'the tone of the disclosed event and any management commentary.\\n\\n',
+                                'Assess based on: language confidence and specificity, forward-looking guidance ',
+                                'quality, transparency about risks vs. deflection, frequency of boilerplate ',
+                                'hedging language, specificity of financial targets and timelines.\\n\\n',
                                 'Return JSON only — no markdown, no surrounding text:\\n',
-                                '{\"tone_score\": <integer 0-10>, \"rationale\": \"<one concise sentence>\"}\\n\\n',
+                                '{\"negative\": <0.00-1.00>, \"neutral\": <0.00-1.00>, \"positive\": <0.00-1.00>, \"rationale\": \"<one concise sentence>\"}\\n\\n',
                                 context_text
                             )
                         ),
@@ -349,7 +368,7 @@ else:
             parsed AS (
                 SELECT
                     symbol, form_type, filing_date, accession,
-                    from_json(tone_json, 'STRUCT<tone_score:INT, rationale:STRING>') AS tone
+                    from_json(tone_json, 'STRUCT<negative:DOUBLE, neutral:DOUBLE, positive:DOUBLE, rationale:STRING>') AS tone
                 FROM extracted
             )
 
@@ -360,24 +379,28 @@ else:
                 CONCAT('sec_filing_', form_type)                                  AS source_type,
                 CONCAT(form_type, ' ', filing_date, ' — Management Tone')         AS source_description,
                 CASE
-                    WHEN tone.tone_score >= 7 THEN 'Positive'
-                    WHEN tone.tone_score <= 3 THEN 'Negative'
-                    ELSE                           'Neutral'
+                    WHEN tone.positive >= tone.negative AND tone.positive >= tone.neutral THEN 'Positive'
+                    WHEN tone.negative >= tone.positive AND tone.negative >= tone.neutral THEN 'Negative'
+                    ELSE                                                                       'Neutral'
                 END                                                               AS sentiment,
                 CASE
-                    WHEN tone.tone_score <= 3 THEN 0.9
-                    WHEN tone.tone_score <= 6 THEN 0.5
-                    ELSE                           0.2
+                    WHEN tone.negative >= 0.5  THEN 0.9
+                    WHEN tone.negative >= 0.25 THEN 0.5
+                    ELSE                            0.2
                 END                                                               AS severity_score,
-                tone.tone_score <= 3                                              AS advisor_action_needed,
+                tone.negative >= 0.5                                              AS advisor_action_needed,
                 'Management Tone'                                                 AS signal_type,
                 CONCAT(form_type, ' Management Tone')                             AS signal,
-                CAST(tone.tone_score AS STRING)                                   AS signal_value,
+                CONCAT('[', CAST(ROUND(tone.negative, 2) AS STRING), ',',
+                            CAST(ROUND(tone.neutral,  2) AS STRING), ',',
+                            CAST(ROUND(tone.positive, 2) AS STRING), ']')         AS signal_value,
                 tone.rationale                                                    AS rationale,
                 CURRENT_TIMESTAMP()                                               AS processed_at
             FROM parsed
-            WHERE tone.tone_score IS NOT NULL
-              AND tone.rationale   IS NOT NULL
+            WHERE tone.negative  IS NOT NULL
+              AND tone.neutral   IS NOT NULL
+              AND tone.positive  IS NOT NULL
+              AND tone.rationale IS NOT NULL
 
         ) AS src
         ON tgt.signal_id = src.signal_id
@@ -406,7 +429,7 @@ else:
 display(
     spark.sql(f"""
         SELECT symbol, signal_date, source_type, source_description,
-               CAST(signal_value AS INT) AS tone_score,
+               signal_value AS tone_distribution,
                sentiment, advisor_action_needed, severity_score,
                LEFT(rationale, 250) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
