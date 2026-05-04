@@ -148,6 +148,15 @@ resources:
             base_parameters:
               <<: *base_params
 
+        - task_key: vs_resync_signals
+          depends_on:
+            - task_key: refinement_01_news_signals
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "utils/vs_resync"
+            base_parameters:
+              index_name: "ahtsa.awm.vs_signals"
+
     # ══════════════════════════════════════════════════════════════════════════
     # MONTHLY — reference data, filings, earnings; updated end-of-month
     # Schedule: 3:00 AM UTC on the 1st of each month
@@ -351,3 +360,33 @@ resources:
             notebook_path: "4_data_refinement/04_earnings_transcript_signals"
             base_parameters:
               <<: *base_params
+
+        # ── Vector Search resyncs: each fires after its source data is finalized ──
+        - task_key: vs_resync_sec_filings
+          depends_on:
+            - task_key: refinement_03_sec_filing_signals
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "utils/vs_resync"
+            base_parameters:
+              index_name: "ahtsa.awm.vs_sec_filings"
+
+        - task_key: vs_resync_transcripts
+          depends_on:
+            - task_key: refinement_04_earnings_transcript_signals
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "utils/vs_resync"
+            base_parameters:
+              index_name: "ahtsa.awm.vs_earnings_transcripts"
+
+        - task_key: vs_resync_signals
+          depends_on:
+            - task_key: refinement_02_bdc_signals
+            - task_key: refinement_03_sec_filing_signals
+            - task_key: refinement_04_earnings_transcript_signals
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "utils/vs_resync"
+            base_parameters:
+              index_name: "ahtsa.awm.vs_signals"
