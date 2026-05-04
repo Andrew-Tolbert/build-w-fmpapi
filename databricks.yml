@@ -162,11 +162,12 @@ resources:
     # Schedule: 3:00 AM UTC on the 1st of each month
     # Tasks: company profiles, financials, key metrics, ETF data, SEC filings,
     #        transcripts, financial reports, FactSet filings, EDGAR BDC signals,
-    #        + refinement signals for SEC filings, transcripts, BDC early warnings
+    #        + refinement signals for SEC filings, transcripts, BDC early warnings, management tone
     # DAG: profiles → financials → key_metrics → etf_data
     #        → [sec_filings | transcripts | financial_reports] (parallel)
     #      sec_filings → sec_parsing → sec_validation → refinement_03_sec_filing_signals
     #      transcripts → ingest_transcripts → refinement_04_earnings_transcript_signals
+    #      sec_validation + ingest_transcripts → refinement_05_management_tone_signals
     #      edgar_bdc (independent) → refinement_02_bdc_signals
     # ══════════════════════════════════════════════════════════════════════════
     gs_awm_ingest_monthly:
@@ -361,6 +362,16 @@ resources:
             base_parameters:
               <<: *base_params
 
+        - task_key: refinement_05_management_tone_signals
+          depends_on:
+            - task_key: ingest_fmapi_13_sec_validation
+            - task_key: ingest_fmapi_10_transcripts
+          <<: *serverless_env
+          notebook_task:
+            notebook_path: "4_data_refinement/05_management_tone_signals"
+            base_parameters:
+              <<: *base_params
+
         # ── Vector Search resyncs: each fires after its source data is finalized ──
         - task_key: vs_resync_sec_filings
           depends_on:
@@ -385,6 +396,7 @@ resources:
             - task_key: refinement_02_bdc_signals
             - task_key: refinement_03_sec_filing_signals
             - task_key: refinement_04_earnings_transcript_signals
+            - task_key: refinement_05_management_tone_signals
           <<: *serverless_env
           notebook_task:
             notebook_path: "utils/vs_resync"
