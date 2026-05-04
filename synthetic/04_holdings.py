@@ -162,6 +162,9 @@ def make_positions(tickers, asset_class, budget, inception_date, account_id, con
         })
     return rows
 
+SATELLITE_BDC_TICKERS = [t for t in ["TCPC", "FSK", "GSBD", "NMFC", "OCSL", "GBDC"] if t in latest_prices]
+HIGH_RISK_PROFILES    = {"Growth", "Growth-HNW", "Alternatives-Heavy"}
+
 all_holdings = []
 
 for _, account in accounts_df.iterrows():
@@ -257,6 +260,16 @@ for _, account in accounts_df.iterrows():
         n = int(rng.integers(1, 4))
         sample = list(rng.choice(bdc_universe, size=min(n, len(bdc_universe)), replace=False))
         rows += make_positions(sample, "Private Credit", bdc_budget, inception_date, account_id, concentration=3.0)
+
+    # ── Satellite BDC positions — very small % of high-risk accounts ──────────
+    # A handful (~3%) of Growth / Growth-HNW / Alternatives-Heavy accounts hold
+    # small satellite positions in specific BDC names (TCPC, FSK, GSBD, NMFC,
+    # OCSL, GBDC), independent of the bdc_eligible flag.
+    if risk_profile in HIGH_RISK_PROFILES and SATELLITE_BDC_TICKERS and rng.random() < 0.03:
+        n          = int(rng.integers(1, 3))
+        sample     = list(rng.choice(SATELLITE_BDC_TICKERS, size=min(n, len(SATELLITE_BDC_TICKERS)), replace=False))
+        sat_budget = account_aum * rng.uniform(0.005, 0.015)   # 0.5–1.5% of AUM
+        rows += make_positions(sample, "Private Credit", sat_budget, inception_date, account_id, concentration=3.0)
 
     # ── Cash: IPS target + rounding remainder, hard-capped at IPS max ─────────
     allocated_mv = sum(r["market_value"] for r in rows)
