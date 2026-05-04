@@ -185,7 +185,7 @@ else:
                                 'guidance, handling of analyst challenges in Q&A, frequency of hedging language, ',
                                 'transparency about problems vs. deflection.\\n\\n',
                                 'Return JSON only — no markdown, no surrounding text:\\n',
-                                '{\"negative\": <0.00-1.00>, \"neutral\": <0.00-1.00>, \"positive\": <0.00-1.00>, \"rationale\": \"<one concise sentence>\"}\\n\\n',
+                                '{{"negative": <0.00-1.00>, "neutral": <0.00-1.00>, "positive": <0.00-1.00>, "rationale": "<one concise sentence>"}}\\n\\n',
                                 context_text
                             )
                         ),
@@ -214,11 +214,11 @@ else:
                     ELSE                                                                       'Neutral'
                 END                                                               AS sentiment,
                 CASE
-                    WHEN tone.negative >= 0.5  THEN 0.9
+                    WHEN tone.negative >= 0.4  THEN 0.9
                     WHEN tone.negative >= 0.25 THEN 0.5
                     ELSE                            0.2
                 END                                                               AS severity_score,
-                tone.negative >= 0.5                                              AS advisor_action_needed,
+                tone.negative >= 0.4                                              AS advisor_action_needed,
                 'Management Tone'                                                 AS signal_type,
                 CONCAT('Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' Management Tone') AS signal,
                 CONCAT('[', CAST(ROUND(tone.negative, 2) AS STRING), ',',
@@ -355,7 +355,7 @@ else:
                                 'quality, transparency about risks vs. deflection, frequency of boilerplate ',
                                 'hedging language, specificity of financial targets and timelines.\\n\\n',
                                 'Return JSON only — no markdown, no surrounding text:\\n',
-                                '{\"negative\": <0.00-1.00>, \"neutral\": <0.00-1.00>, \"positive\": <0.00-1.00>, \"rationale\": \"<one concise sentence>\"}\\n\\n',
+                                '{{"negative": <0.00-1.00>, "neutral": <0.00-1.00>, "positive": <0.00-1.00>, "rationale": "<one concise sentence>"}}\\n\\n',
                                 context_text
                             )
                         ),
@@ -384,11 +384,11 @@ else:
                     ELSE                                                                       'Neutral'
                 END                                                               AS sentiment,
                 CASE
-                    WHEN tone.negative >= 0.5  THEN 0.9
+                    WHEN tone.negative >= 0.4  THEN 0.9
                     WHEN tone.negative >= 0.25 THEN 0.5
                     ELSE                            0.2
                 END                                                               AS severity_score,
-                tone.negative >= 0.5                                              AS advisor_action_needed,
+                tone.negative >= 0.4                                              AS advisor_action_needed,
                 'Management Tone'                                                 AS signal_type,
                 CONCAT(form_type, ' Management Tone')                             AS signal,
                 CONCAT('[', CAST(ROUND(tone.negative, 2) AS STRING), ',',
