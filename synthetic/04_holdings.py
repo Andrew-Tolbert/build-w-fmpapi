@@ -11,7 +11,11 @@
 # Current prices and cost basis come from bronze_historical_prices (adjClose).
 # Alternatives exposure uses real-asset ETFs (GLD, SLV, DBC, VNQ) — all have daily prices.
 # BDC exposure is capped at 4% of account AUM regardless of IPS target.
-# IPS drift calibrated so ~10% of accounts show at least one asset class outside min/max.
+# IPS drift is tiered per account:
+#   ~65% of accounts: within 3% of target (tight)
+#   ~30% of accounts: 5-10% off target (moderate)
+#    ~5% of accounts: >10% breach on at least one asset class (handful)
+# Zero-mean noise prevents systematic equity overweight / alternatives underweight.
 # Target: {catalog}.{schema}.holdings
 
 # COMMAND ----------
@@ -171,15 +175,25 @@ for _, account in accounts_df.iterrows():
     tier         = client["tier"]
     bdc_eligible = client["bdc_eligible"]
 
-    # ── Apply Gaussian drift to IPS targets ────────────────────────────────────
-    # sigma = (max - min) / 8 → ~10% of accounts drift outside band
-    profile = ips_dict[risk_profile]
-    raw_pcts = {}
-    for ac, bounds in profile.items():
-        sigma = (bounds["max"] - bounds["min"]) / 8.0
-        raw_pcts[ac] = max(0.0, bounds["target"] + rng.normal(0, sigma))
-    total_pct = sum(raw_pcts.values())
-    actual_pcts = {ac: v / total_pct * 100 for ac, v in raw_pcts.items()}
+    # ── Apply tiered drift to IPS targets ─────────────────────────────────────
+    # Zero-mean noise (noise -= noise.mean()) prevents any single asset class from
+    # being systematically over- or under-weight across the portfolio — if equity
+    # drifts up, something else drifts down by the same amount in aggregate.
+    profile   = ips_dict[risk_profile]
+    tier_roll = rng.random()
+    if tier_roll < 0.65:
+        drift_sigma = 1.2    # tight: nearly all classes stay within 3% of target
+    elif tier_roll < 0.95:
+        drift_sigma = 3.5    # moderate: typical drift of 5-7%
+    else:
+        drift_sigma = 8.0    # breach: >10% on at least one class
+
+    acs     = list(profile.keys())
+    targets = np.array([profile[ac]["target"] for ac in acs])
+    noise   = rng.normal(0, drift_sigma, len(acs))
+    noise  -= noise.mean()                            # zero-sum: no class systematically biased
+    raw     = np.maximum(0.0, targets + noise)
+    actual_pcts = {ac: raw[i] / (raw.sum() or 1.0) * 100 for i, ac in enumerate(acs)}
 
     buckets = {ac: account_aum * pct / 100 for ac, pct in actual_pcts.items()}
 
