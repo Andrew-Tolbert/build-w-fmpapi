@@ -430,7 +430,6 @@
 # MAGIC -- All series indexed to 0% at the nearest trading day on or before the window open.
 # MAGIC -- Alpha = portfolio_return_after_fees − benchmark_return (S&P 500).
 # MAGIC CREATE OR REPLACE TABLE silver_advisor_daily_returns
-# MAGIC USING DELTA
 # MAGIC COMMENT 'Daily portfolio vs S&P 500 return timeseries per advisor, trailing 365 days.'
 # MAGIC AS
 # MAGIC WITH
@@ -586,6 +585,11 @@
 # MAGIC JOIN  portfolio_baseline   pb ON dp.advisor_id = pb.advisor_id
 # MAGIC CROSS JOIN benchmark_baseline bb
 # MAGIC ORDER BY dp.advisor_id, dp.date
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from silver_advisor_daily_returns where advisor_id = 'ADV001'
 
 # COMMAND ----------
 
