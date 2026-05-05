@@ -427,10 +427,13 @@
 # DBTITLE 1,CREATE silver_advisor_daily_returns
 # MAGIC %sql
 # MAGIC -- One row per (date, advisor_id). Covers the trailing 365 calendar days.
-# MAGIC -- All series indexed to 0% at the nearest trading day on or before the window open.
-# MAGIC -- Alpha = portfolio_return_after_fees − benchmark_return (S&P 500).
+# MAGIC -- Returns are indexed to 0% at the first trading day in the window:
+# MAGIC --   portfolio_baseline = actual advisor AUM on day 1 (not a computed cost basis)
+# MAGIC --   benchmark_baseline = GSPC close on day 1
+# MAGIC -- This guarantees both series start at exactly 0.0 on the first row.
 # MAGIC CREATE OR REPLACE TABLE silver_advisor_daily_returns
-# MAGIC COMMENT 'Daily portfolio vs S&P 500 return timeseries per advisor, trailing 365 days.'
+# MAGIC USING DELTA
+# MAGIC COMMENT 'Daily portfolio vs S&P 500 (GSPC) return timeseries per advisor, trailing 365 days.'
 # MAGIC AS
 # MAGIC WITH
 # MAGIC
@@ -457,8 +460,9 @@
 # MAGIC     AND date <= (SELECT end_price_dt   FROM price_dates)
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Equity positions as of end_date, carrying advisor_id ─────────────────────
-# MAGIC -- advisor_id is pulled here so every downstream CTE can group by it.
+# MAGIC -- ── Equity positions as of today, carrying advisor_id ────────────────────────
+# MAGIC -- Using end-of-period quantities for every day creates a consistent "same basket"
+# MAGIC -- return series — matching how performance is typically quoted for a book of business.
 # MAGIC filtered_positions AS (
 # MAGIC   SELECT
 # MAGIC     t.account_id,
@@ -475,24 +479,6 @@
 # MAGIC   GROUP BY t.account_id, t.ticker, c.advisor_id
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Positions that existed before the period start ──────────────────────────
-# MAGIC -- Pre-existing → baseline = quantity × start_price (matches period_cost_basis)
-# MAGIC -- New (opened mid-period) → baseline = actual total_cost paid
-# MAGIC pre_existing_positions AS (
-# MAGIC   SELECT DISTINCT account_id, ticker
-# MAGIC   FROM transactions
-# MAGIC   WHERE action IN ('BUY', 'DRIP')
-# MAGIC     AND ticker != 'CASH'
-# MAGIC     AND date < (SELECT start_dt FROM params)
-# MAGIC ),
-# MAGIC
-# MAGIC -- ── Start-of-period prices ────────────────────────────────────────────────────
-# MAGIC series_start_prices AS (
-# MAGIC   SELECT symbol, adjClose AS start_price
-# MAGIC   FROM bronze_historical_prices
-# MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
-# MAGIC ),
-# MAGIC
 # MAGIC -- ── Daily portfolio value per advisor ─────────────────────────────────────────
 # MAGIC daily_portfolio AS (
 # MAGIC   SELECT
@@ -506,43 +492,33 @@
 # MAGIC   GROUP BY td.date, fp.advisor_id
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Portfolio baseline per advisor ────────────────────────────────────────────
-# MAGIC -- Denominator that indexes returns to 0% at period start.
+# MAGIC -- ── Portfolio baseline = actual AUM on day 1 ─────────────────────────────────
+# MAGIC -- Dividing by this value guarantees portfolio_return = 0.0 on the first row.
 # MAGIC portfolio_baseline AS (
-# MAGIC   SELECT
-# MAGIC     fp.advisor_id,
-# MAGIC     SUM(
-# MAGIC       CASE WHEN pp.account_id IS NOT NULL
-# MAGIC            THEN fp.quantity * sp.start_price
-# MAGIC            ELSE fp.total_cost
-# MAGIC       END
-# MAGIC     ) AS base
-# MAGIC   FROM filtered_positions    fp
-# MAGIC   LEFT JOIN series_start_prices    sp ON fp.ticker     = sp.symbol
-# MAGIC   LEFT JOIN pre_existing_positions pp ON fp.account_id = pp.account_id
-# MAGIC                                       AND fp.ticker    = pp.ticker
-# MAGIC   GROUP BY fp.advisor_id
+# MAGIC   SELECT advisor_id, portfolio_value AS base
+# MAGIC   FROM daily_portfolio
+# MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Daily S&P 500 series ──────────────────────────────────────────────────────
+# MAGIC -- ── Daily S&P 500 series (symbol = 'GSPC') ───────────────────────────────────
 # MAGIC daily_benchmark AS (
 # MAGIC   SELECT
 # MAGIC     td.date,
 # MAGIC     MAX_BY(v.close, v.date) AS benchmark_value
 # MAGIC   FROM trading_days td
 # MAGIC   LEFT JOIN bronze_indexes_and_vix v
-# MAGIC     ON v.index = 'SP500' AND v.date = td.date
+# MAGIC     ON v.symbol = 'GSPC' AND v.date = td.date
 # MAGIC   GROUP BY td.date
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── S&P 500 value at period start (indexes benchmark to 0%) ──────────────────
+# MAGIC -- ── Benchmark baseline = GSPC close on day 1 ─────────────────────────────────
 # MAGIC benchmark_baseline AS (
 # MAGIC   SELECT benchmark_value AS base
 # MAGIC   FROM daily_benchmark
 # MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
 # MAGIC ),
 # MAGIC
-# MAGIC -- ── Fee transactions per advisor pre-filtered to the period ───────────────────
+# MAGIC -- ── Fee transactions per advisor, pre-filtered to the window ─────────────────
 # MAGIC advisor_fees AS (
 # MAGIC   SELECT f.date, f.net_amount, fp.advisor_id
 # MAGIC   FROM transactions f
@@ -553,7 +529,6 @@
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Cumulative fees per advisor as a step function ────────────────────────────
-# MAGIC -- Flat between fee dates, steps up on each advisory fee deduction.
 # MAGIC fees_by_day AS (
 # MAGIC   SELECT
 # MAGIC     td.date,
@@ -578,7 +553,7 @@
 # MAGIC     - db.benchmark_value / NULLIF(bb.base, 0),                                  6) AS portfolio_alpha,
 # MAGIC   ROUND(fd.cumulative_fees,                                                      2) AS cumulative_fees,
 # MAGIC   ROUND(db.benchmark_value / NULLIF(bb.base, 0) - 1,                            6) AS benchmark_return,
-# MAGIC   'SP500'                                                                           AS benchmark
+# MAGIC   'GSPC'                                                                            AS benchmark
 # MAGIC FROM daily_portfolio    dp
 # MAGIC LEFT JOIN daily_benchmark  db ON dp.date = db.date
 # MAGIC LEFT JOIN fees_by_day      fd ON dp.date = fd.date AND dp.advisor_id = fd.advisor_id
