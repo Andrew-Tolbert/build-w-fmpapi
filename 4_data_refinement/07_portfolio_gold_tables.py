@@ -26,6 +26,7 @@
 # MAGIC | Table | Description |
 # MAGIC |---|---|
 # MAGIC | `silver_advisor_daily_returns` | Daily portfolio vs S&P 500 return timeseries per advisor, trailing 365 days |
+# MAGIC | `gold_account_ips_drift` | Materialized IPS drift table — one row per (account × asset class) |
 # MAGIC | `gold_app_portfolio_summary` | One row per advisor_id — KPI stat cards |
 # MAGIC | `gold_app_asset_allocation` | Advisor book weighted by asset class |
 # MAGIC | `gold_app_performance_timeseries` | Daily cumulative returns for area chart |
@@ -409,6 +410,90 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ORDER BY
 # MAGIC   dp.advisor_id,
 # MAGIC   dp.date
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+# MAGIC ## `gold_account_ips_drift`
+# MAGIC Materialized table version of `gold_ips_drift`. One row per (account_id × asset_class).
+# MAGIC Queried directly by the advisor app — rebuilt here after every synthetic data refresh.
+
+# COMMAND ----------
+
+# DBTITLE 1,gold_account_ips_drift
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE ahtsa.awm.gold_account_ips_drift AS
+# MAGIC WITH
+# MAGIC account_totals AS (
+# MAGIC   SELECT account_id, SUM(market_value) AS total_account_value
+# MAGIC   FROM holdings
+# MAGIC   GROUP BY account_id
+# MAGIC ),
+# MAGIC actual_by_class AS (
+# MAGIC   SELECT account_id, asset_class,
+# MAGIC     SUM(market_value) AS actual_market_value,
+# MAGIC     COUNT(*)          AS positions_count
+# MAGIC   FROM holdings
+# MAGIC   GROUP BY account_id, asset_class
+# MAGIC ),
+# MAGIC account_class_grid AS (
+# MAGIC   SELECT a.account_id, it.asset_class
+# MAGIC   FROM (SELECT DISTINCT account_id FROM holdings) a
+# MAGIC   CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) it
+# MAGIC )
+# MAGIC SELECT
+# MAGIC   c.advisor_id, c.client_id, c.client_name, c.tier, c.risk_profile,
+# MAGIC   ac.account_id, ac.account_name, ac.account_type,
+# MAGIC   g.asset_class,
+# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0), 2)                            AS actual_market_value,
+# MAGIC   ROUND(at.total_account_value, 2)                                         AS total_account_value,
+# MAGIC   COALESCE(ab.positions_count, 0)                                          AS positions_count,
+# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100, 4) AS actual_allocation_pct,
+# MAGIC   it.target_allocation_pct, it.min_allocation_pct, it.max_allocation_pct, it.rebalance_trigger_pct,
+# MAGIC   ROUND(it.target_allocation_pct / 100 * at.total_account_value, 2) AS target_market_value,
+# MAGIC   ROUND(it.min_allocation_pct    / 100 * at.total_account_value, 2) AS min_market_value,
+# MAGIC   ROUND(it.max_allocation_pct    / 100 * at.total_account_value, 2) AS max_market_value,
+# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.target_allocation_pct, 4) AS drift_from_target_pct,
+# MAGIC   ROUND(GREATEST(0,
+# MAGIC     COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.max_allocation_pct,
+# MAGIC     it.min_allocation_pct - COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
+# MAGIC   ), 4) AS out_of_bounds_pct,
+# MAGIC   ROUND(CASE
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct
+# MAGIC       THEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.max_allocation_pct
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 < it.min_allocation_pct
+# MAGIC       THEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.min_allocation_pct
+# MAGIC     ELSE -LEAST(
+# MAGIC       it.max_allocation_pct - COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100,
+# MAGIC       COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 - it.min_allocation_pct)
+# MAGIC   END, 4) AS band_distance_pct,
+# MAGIC   CASE
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct THEN 'Over Band'
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 < it.min_allocation_pct THEN 'Under Band'
+# MAGIC     ELSE 'Within Band'
+# MAGIC   END AS drift_status,
+# MAGIC   CASE
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct + it.rebalance_trigger_pct THEN 'Critical'
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 < it.min_allocation_pct - it.rebalance_trigger_pct THEN 'Critical'
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct THEN 'Warning'
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 < it.min_allocation_pct THEN 'Warning'
+# MAGIC     ELSE 'OK'
+# MAGIC   END AS drift_severity,
+# MAGIC   ROUND(it.target_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0), 2) AS rebalance_to_target,
+# MAGIC   ROUND(CASE
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 > it.max_allocation_pct
+# MAGIC       THEN it.max_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0)
+# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100 < it.min_allocation_pct
+# MAGIC       THEN it.min_allocation_pct / 100 * at.total_account_value - COALESCE(ab.actual_market_value, 0)
+# MAGIC     ELSE 0
+# MAGIC   END, 2) AS rebalance_to_band
+# MAGIC FROM account_class_grid g
+# MAGIC JOIN accounts       ac ON g.account_id   = ac.account_id
+# MAGIC JOIN clients        c  ON ac.client_id   = c.client_id
+# MAGIC JOIN account_totals at ON g.account_id   = at.account_id
+# MAGIC JOIN ips_targets    it ON c.risk_profile = it.risk_profile AND g.asset_class = it.asset_class
+# MAGIC LEFT JOIN actual_by_class ab ON g.account_id = ab.account_id AND g.asset_class = ab.asset_class
 
 # COMMAND ----------
 
