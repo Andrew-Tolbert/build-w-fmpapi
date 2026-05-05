@@ -603,10 +603,207 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC SELECT COUNT(*) AS row_count, COUNT(DISTINCT account_id) AS accounts,
-# MAGIC        SUM(CASE WHEN drift_status != 'Within Band' THEN 1 ELSE 0 END) AS breach_rows,
-# MAGIC        SUM(CASE WHEN drift_severity = 'Critical'   THEN 1 ELSE 0 END) AS critical_rows
-# MAGIC FROM gold_ips_drift
+# MAGIC -- One row per (date, advisor_id), trailing 365 calendar days.
+# MAGIC -- Returns are indexed to 0% at the first trading day in the window:
+# MAGIC --   portfolio_baseline  = actual advisor AUM on day 1
+# MAGIC --   benchmark_baseline  = GSPC close on day 1
+# MAGIC CREATE OR REPLACE TABLE silver_advisor_daily_returns
+# MAGIC   COMMENT 'Daily portfolio vs S&P 500 (GSPC) return timeseries per advisor, trailing 365 days.' AS
+# MAGIC WITH params AS (
+# MAGIC   SELECT
+# MAGIC     date_sub(current_date(), 365) AS start_dt,
+# MAGIC     current_date()                AS end_dt
+# MAGIC ),
+# MAGIC price_dates AS (
+# MAGIC   SELECT
+# MAGIC     max(CASE WHEN date <= (SELECT end_dt   FROM params) THEN date END) AS end_price_dt,
+# MAGIC     max(CASE WHEN date <= (SELECT start_dt FROM params) THEN date END) AS start_price_dt
+# MAGIC   FROM bronze_historical_prices
+# MAGIC ),
+# MAGIC trading_days AS (
+# MAGIC   SELECT DISTINCT date
+# MAGIC   FROM bronze_historical_prices
+# MAGIC   WHERE date >= (SELECT start_price_dt FROM price_dates)
+# MAGIC     AND date <= (SELECT end_price_dt   FROM price_dates)
+# MAGIC ),
+# MAGIC filtered_positions AS (
+# MAGIC   SELECT
+# MAGIC     t.account_id,
+# MAGIC     t.ticker,
+# MAGIC     c.advisor_id,
+# MAGIC     sum(t.quantity)     AS quantity,
+# MAGIC     sum(t.gross_amount) AS total_cost
+# MAGIC   FROM transactions t
+# MAGIC   JOIN accounts a ON t.account_id = a.account_id
+# MAGIC   JOIN clients  c ON a.client_id  = c.client_id
+# MAGIC   WHERE t.action IN ('BUY', 'DRIP')
+# MAGIC     AND t.ticker != 'CASH'
+# MAGIC     AND t.date <= (SELECT end_dt FROM params)
+# MAGIC   GROUP BY
+# MAGIC     t.account_id,
+# MAGIC     t.ticker,
+# MAGIC     c.advisor_id
+# MAGIC ),
+# MAGIC daily_portfolio AS (
+# MAGIC   SELECT
+# MAGIC     td.date,
+# MAGIC     fp.advisor_id,
+# MAGIC     sum(fp.quantity * hp.adjClose) AS portfolio_value
+# MAGIC   FROM trading_days td
+# MAGIC   CROSS JOIN filtered_positions fp
+# MAGIC   JOIN bronze_historical_prices hp
+# MAGIC     ON hp.symbol = fp.ticker
+# MAGIC    AND hp.date   = td.date
+# MAGIC   GROUP BY
+# MAGIC     td.date,
+# MAGIC     fp.advisor_id
+# MAGIC ),
+# MAGIC portfolio_baseline AS (
+# MAGIC   SELECT
+# MAGIC     advisor_id,
+# MAGIC     portfolio_value AS base
+# MAGIC   FROM daily_portfolio
+# MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
+# MAGIC ),
+# MAGIC daily_benchmark AS (
+# MAGIC   SELECT
+# MAGIC     td.date,
+# MAGIC     max_by(v.close, v.date) AS benchmark_value
+# MAGIC   FROM trading_days td
+# MAGIC   LEFT JOIN bronze_indexes_and_vix v
+# MAGIC     ON v.symbol = 'GSPC'
+# MAGIC    AND v.date   = td.date
+# MAGIC   GROUP BY td.date
+# MAGIC ),
+# MAGIC benchmark_baseline AS (
+# MAGIC   SELECT benchmark_value AS base
+# MAGIC   FROM daily_benchmark
+# MAGIC   WHERE date = (SELECT start_price_dt FROM price_dates)
+# MAGIC ),
+# MAGIC advisor_fees AS (
+# MAGIC   SELECT
+# MAGIC     f.date,
+# MAGIC     f.net_amount,
+# MAGIC     fp.advisor_id
+# MAGIC   FROM transactions f
+# MAGIC   JOIN (
+# MAGIC     SELECT DISTINCT account_id, advisor_id
+# MAGIC     FROM filtered_positions
+# MAGIC   ) fp ON f.account_id = fp.account_id
+# MAGIC   WHERE f.action = 'FEE'
+# MAGIC     AND f.date >= (SELECT start_price_dt FROM price_dates)
+# MAGIC ),
+# MAGIC fees_by_day AS (
+# MAGIC   SELECT
+# MAGIC     td.date,
+# MAGIC     adv.advisor_id,
+# MAGIC     coalesce(sum(abs(af.net_amount)), 0) AS cumulative_fees
+# MAGIC   FROM trading_days td
+# MAGIC   CROSS JOIN (
+# MAGIC     SELECT DISTINCT advisor_id
+# MAGIC     FROM filtered_positions
+# MAGIC   ) adv
+# MAGIC   LEFT JOIN advisor_fees af
+# MAGIC     ON af.advisor_id = adv.advisor_id
+# MAGIC    AND af.date      <= td.date
+# MAGIC   GROUP BY
+# MAGIC     td.date,
+# MAGIC     adv.advisor_id
+# MAGIC ),
+# MAGIC advisor_inflows AS (
+# MAGIC   SELECT
+# MAGIC     t.date,
+# MAGIC     t.quantity AS amount,
+# MAGIC     fp.advisor_id
+# MAGIC   FROM transactions t
+# MAGIC   JOIN (
+# MAGIC     SELECT DISTINCT account_id, advisor_id
+# MAGIC     FROM filtered_positions
+# MAGIC   ) fp ON t.account_id = fp.account_id
+# MAGIC   WHERE t.action = 'BUY'
+# MAGIC     AND t.ticker = 'CASH'
+# MAGIC     AND t.date  >= (SELECT start_price_dt FROM price_dates)
+# MAGIC ),
+# MAGIC inflows_by_day AS (
+# MAGIC   SELECT
+# MAGIC     td.date,
+# MAGIC     adv.advisor_id,
+# MAGIC     coalesce(sum(ai.amount), 0) AS cumulative_inflows
+# MAGIC   FROM trading_days td
+# MAGIC   CROSS JOIN (
+# MAGIC     SELECT DISTINCT advisor_id
+# MAGIC     FROM filtered_positions
+# MAGIC   ) adv
+# MAGIC   LEFT JOIN advisor_inflows ai
+# MAGIC     ON ai.advisor_id = adv.advisor_id
+# MAGIC    AND ai.date      <= td.date
+# MAGIC   GROUP BY
+# MAGIC     td.date,
+# MAGIC     adv.advisor_id
+# MAGIC ),
+# MAGIC advisor_dividends AS (
+# MAGIC   SELECT
+# MAGIC     t.date,
+# MAGIC     t.net_amount,
+# MAGIC     fp.advisor_id
+# MAGIC   FROM transactions t
+# MAGIC   JOIN (
+# MAGIC     SELECT DISTINCT account_id, advisor_id
+# MAGIC     FROM filtered_positions
+# MAGIC   ) fp ON t.account_id = fp.account_id
+# MAGIC   WHERE t.action = 'DIVIDEND'
+# MAGIC     AND t.date  >= (SELECT start_price_dt FROM price_dates)
+# MAGIC ),
+# MAGIC dividends_by_day AS (
+# MAGIC   SELECT
+# MAGIC     td.date,
+# MAGIC     adv.advisor_id,
+# MAGIC     coalesce(sum(ad.net_amount), 0) AS cumulative_dividends
+# MAGIC   FROM trading_days td
+# MAGIC   CROSS JOIN (
+# MAGIC     SELECT DISTINCT advisor_id
+# MAGIC     FROM filtered_positions
+# MAGIC   ) adv
+# MAGIC   LEFT JOIN advisor_dividends ad
+# MAGIC     ON ad.advisor_id = adv.advisor_id
+# MAGIC    AND ad.date      <= td.date
+# MAGIC   GROUP BY
+# MAGIC     td.date,
+# MAGIC     adv.advisor_id
+# MAGIC )
+# MAGIC SELECT
+# MAGIC   dp.date,
+# MAGIC   dp.advisor_id,
+# MAGIC   round(dp.portfolio_value / nullif(pb.base, 0) - 1, 6) AS portfolio_return_before_fees,
+# MAGIC   round((dp.portfolio_value - fd.cumulative_fees) / nullif(pb.base, 0) - 1, 6) AS portfolio_return_after_fees,
+# MAGIC   round(
+# MAGIC     (dp.portfolio_value - fd.cumulative_fees) / nullif(pb.base, 0)
+# MAGIC       - db.benchmark_value / nullif(bb.base, 0),
+# MAGIC     6
+# MAGIC   ) AS portfolio_alpha,
+# MAGIC   round(fd.cumulative_fees,     2) AS cumulative_fees,
+# MAGIC   round(id.cumulative_inflows,  2) AS cumulative_inflows,
+# MAGIC   round(dd.cumulative_dividends,2) AS cumulative_dividends,
+# MAGIC   round(db.benchmark_value / nullif(bb.base, 0) - 1, 6) AS benchmark_return,
+# MAGIC   'GSPC' AS benchmark
+# MAGIC FROM daily_portfolio dp
+# MAGIC LEFT JOIN daily_benchmark db
+# MAGIC   ON dp.date = db.date
+# MAGIC LEFT JOIN fees_by_day fd
+# MAGIC   ON dp.date       = fd.date
+# MAGIC  AND dp.advisor_id = fd.advisor_id
+# MAGIC LEFT JOIN inflows_by_day id
+# MAGIC   ON dp.date       = id.date
+# MAGIC  AND dp.advisor_id = id.advisor_id
+# MAGIC LEFT JOIN dividends_by_day dd
+# MAGIC   ON dp.date       = dd.date
+# MAGIC  AND dp.advisor_id = dd.advisor_id
+# MAGIC JOIN portfolio_baseline pb
+# MAGIC   ON dp.advisor_id = pb.advisor_id
+# MAGIC CROSS JOIN benchmark_baseline bb
+# MAGIC ORDER BY
+# MAGIC   dp.advisor_id,
+# MAGIC   dp.date;
 
 # COMMAND ----------
 
@@ -615,3 +812,4 @@ print(f"  gold_financial_fundamentals    — financials, ratios, analyst estimat
 print(f"  gold_financials_vs_estimates   — actuals vs consensus, beat/miss flags")
 print(f"  gold_portfolio_sector_exposure — ETF look-through sector exposure")
 print(f"  gold_ips_drift                 — IPS allocation drift (live view)")
+print(f"  silver_advisor_daily_returns   — daily returns")
