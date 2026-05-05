@@ -121,9 +121,11 @@ for i in range(100):
 
 clients_df = pd.DataFrame(records)
 
-# Mark ~25 UHNW clients as BDC-eligible (board-approved for private credit BDC exposure)
+# All UHNW clients are BDC-eligible — every UHNW IPS profile carries a non-zero
+# private credit target, so gating on a random 25-client subset caused ~125 accounts
+# to show large negative PC drift with 0% actual vs 2-3% target.
 uhnw_ids = clients_df[clients_df["tier"] == "UHNW"]["client_id"].tolist()
-bdc_eligible_ids = set(random.sample(uhnw_ids, 25))
+bdc_eligible_ids = set(uhnw_ids)
 clients_df["bdc_eligible"] = clients_df["client_id"].isin(bdc_eligible_ids)
 
 # COMMAND ----------

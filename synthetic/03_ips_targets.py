@@ -38,34 +38,38 @@ IPS_PROFILES = {
     # ── UHNW profiles ─────────────────────────────────────────────────────────
     "Growth": {
         # ETF was 10% → +6% Equity, +2% Fixed Income, +2% Alternatives
-        "Equity":         (51.0, 41.0, 61.0),
+        # PC reduced from 5% to 2%; freed 3% moved to Equity
+        "Equity":         (54.0, 44.0, 64.0),
         "Fixed Income":   (17.0,  7.0, 27.0),
         "Alternatives":   (22.0, 12.0, 32.0),
-        "Private Credit": ( 5.0,  0.0, 10.0),
+        "Private Credit": ( 2.0,  0.0,  4.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Income": {
         # ETF was 10% → +3% Equity, +5% Fixed Income, +2% Alternatives
+        # PC reduced from 15% to 3%; freed 12% moved to Fixed Income
         "Equity":         (28.0, 18.0, 38.0),
-        "Fixed Income":   (35.0, 25.0, 45.0),
+        "Fixed Income":   (47.0, 37.0, 57.0),
         "Alternatives":   (17.0,  7.0, 27.0),
-        "Private Credit": (15.0,  8.0, 20.0),
+        "Private Credit": ( 3.0,  0.0,  5.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Balanced": {
         # ETF was 10% → +5% Equity, +3% Fixed Income, +2% Alternatives
-        "Equity":         (40.0, 30.0, 50.0),
-        "Fixed Income":   (23.0, 13.0, 33.0),
+        # PC reduced from 10% to 2%; freed 8% split evenly to Equity and Fixed Income
+        "Equity":         (44.0, 34.0, 54.0),
+        "Fixed Income":   (27.0, 17.0, 37.0),
         "Alternatives":   (22.0, 12.0, 32.0),
-        "Private Credit": (10.0,  5.0, 15.0),
+        "Private Credit": ( 2.0,  0.0,  4.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Alternatives-Heavy": {
         # ETF was 10% → +3% Equity, +2% Fixed Income, +5% Alternatives
-        "Equity":         (28.0, 18.0, 38.0),
+        # PC reduced from 15% to 3%; freed 12% split 4% Equity / 8% Alternatives
+        "Equity":         (32.0, 22.0, 42.0),
         "Fixed Income":   (12.0,  7.0, 22.0),
-        "Alternatives":   (40.0, 30.0, 50.0),
-        "Private Credit": (15.0,  8.0, 22.0),
+        "Alternatives":   (48.0, 38.0, 58.0),
+        "Private Credit": ( 3.0,  0.0,  5.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     # ── HNW profiles — no Private Credit allocation ────────────────────────────
@@ -74,7 +78,7 @@ IPS_PROFILES = {
         "Equity":         (42.0, 32.0, 52.0),
         "Fixed Income":   (45.0, 35.0, 55.0),
         "Alternatives":   ( 8.0,  0.0, 15.0),
-        "Private Credit": ( 0.0,  0.0,  5.0),
+        "Private Credit": ( 0.0,  0.0,  3.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Moderate": {
@@ -82,7 +86,7 @@ IPS_PROFILES = {
         "Equity":         (58.0, 48.0, 68.0),
         "Fixed Income":   (29.0, 19.0, 39.0),
         "Alternatives":   ( 8.0,  0.0, 15.0),
-        "Private Credit": ( 0.0,  0.0,  5.0),
+        "Private Credit": ( 0.0,  0.0,  3.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Growth-HNW": {
@@ -90,7 +94,7 @@ IPS_PROFILES = {
         "Equity":         (64.0, 54.0, 74.0),
         "Fixed Income":   (23.0, 13.0, 33.0),
         "Alternatives":   ( 8.0,  0.0, 15.0),
-        "Private Credit": ( 0.0,  0.0,  5.0),
+        "Private Credit": ( 0.0,  0.0,  3.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
 }

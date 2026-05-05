@@ -209,8 +209,8 @@ for _, account in accounts_df.iterrows():
 
     # Build non-cash raw buckets, adjusting Private Credit before renormalization.
     # Non-BDC accounts: drop PC entirely so that budget redistributes to other classes.
-    # BDC accounts: cap PC at 4% of AUM before scaling so the spend cap never creates
-    # a gap that would be silently discarded when the cash ceiling is applied.
+    # BDC accounts: cap PC at 8% of AUM (regulatory ceiling, above the IPS max of 4-5%)
+    # so the drift model can naturally push moderate/breach-tier accounts over band.
     non_cash_raw = {}
     for ac, v in buckets.items():
         if ac == "Cash":
@@ -218,7 +218,7 @@ for _, account in accounts_df.iterrows():
         if ac == "Private Credit":
             if not bdc_eligible:
                 continue                          # redistribute to other asset classes
-            v = min(v, account_aum * 0.04)       # cap at 4% before scaling
+            v = min(v, account_aum * 0.08)       # regulatory ceiling above IPS max
         non_cash_raw[ac] = v
 
     non_cash_total  = sum(non_cash_raw.values()) or 1.0
@@ -253,10 +253,10 @@ for _, account in accounts_df.iterrows():
         rows += make_positions(sample, "Alternatives", alt_budget, inception_date, account_id)
 
     # ── Private Credit / BDC ───────────────────────────────────────────────────
-    # Only for BDC-eligible clients; hard cap at 4% of account AUM.
+    # All UHNW clients are BDC-eligible; cap matches the 8% regulatory ceiling above.
     pc_budget = scaled_buckets.get("Private Credit", 0)
     if pc_budget > 0 and bdc_eligible and bdc_universe:
-        bdc_budget = min(pc_budget, account_aum * 0.04)
+        bdc_budget = min(pc_budget, account_aum * 0.08)
         n = int(rng.integers(1, 4))
         sample = list(rng.choice(bdc_universe, size=min(n, len(bdc_universe)), replace=False))
         rows += make_positions(sample, "Private Credit", bdc_budget, inception_date, account_id, concentration=3.0)
