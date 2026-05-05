@@ -48,7 +48,7 @@ BATCH_SIZE       = 10   # calls / filings per MERGE invocation
 # COMMAND ----------
 
 # # Uncomment to reset ALL management tone signals (overall + all sections + delta)
-# spark.sql(f"DELETE FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals WHERE signal_type LIKE 'Management Tone%'")
+#spark.sql(f"DELETE FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals WHERE signal_type LIKE 'Management Tone%'")
 
 # COMMAND ----------
 
@@ -346,7 +346,8 @@ else:
                     tone.negative >= 0.4                                                  AS advisor_action_needed,
                     CASE section_label
                         WHEN 'overall' THEN 'Management Tone - Overall'
-                        ELSE CONCAT('Management Tone - ', section_label)
+                        ELSE CONCAT('Management Tone -
+                         ', section_label)
                     END                                                                   AS signal_type,
                     CONCAT('Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' ',
                         CASE section_label
@@ -827,5 +828,3 @@ display(
         ORDER BY symbol, signal_date DESC, signal_type
     """)
 )
-
-# COMMAND ----------
