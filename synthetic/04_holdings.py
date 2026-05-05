@@ -12,9 +12,9 @@
 # Alternatives exposure uses real-asset ETFs (GLD, SLV, DBC, VNQ) — all have daily prices.
 # BDC exposure is capped at 4% of account AUM regardless of IPS target.
 # IPS drift is tiered per account:
-#   ~65% of accounts: within 3% of target (tight)
-#   ~30% of accounts: 5-10% off target (moderate)
-#    ~5% of accounts: >10% breach on at least one asset class (handful)
+#   ~94% of accounts: within 3% of target (tight)  → OK
+#    ~4% of accounts: 5-10% off target (moderate)  → Warning
+#    ~2% of accounts: >10% breach on at least one asset class → Critical
 # Zero-mean noise prevents systematic equity overweight / alternatives underweight.
 # Target: {catalog}.{schema}.holdings
 
@@ -184,12 +184,12 @@ for _, account in accounts_df.iterrows():
     # drifts up, something else drifts down by the same amount in aggregate.
     profile   = ips_dict[risk_profile]
     tier_roll = rng.random()
-    if tier_roll < 0.65:
-        drift_sigma = 1.2    # tight: nearly all classes stay within 3% of target
-    elif tier_roll < 0.95:
-        drift_sigma = 3.5    # moderate: typical drift of 5-7%
+    if tier_roll < 0.94:
+        drift_sigma = 1.2    # tight: nearly all classes stay within 3% of target → OK
+    elif tier_roll < 0.98:
+        drift_sigma = 3.5    # moderate: typical drift of 5-7% → Warning
     else:
-        drift_sigma = 8.0    # breach: >10% on at least one class
+        drift_sigma = 8.0    # breach: >10% on at least one class → Critical
 
     acs     = list(profile.keys())
     targets = np.array([profile[ac]["target"] for ac in acs])
