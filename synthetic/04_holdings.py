@@ -209,8 +209,9 @@ for _, account in accounts_df.iterrows():
 
     # Build non-cash raw buckets, adjusting Private Credit before renormalization.
     # Non-BDC accounts: drop PC entirely so that budget redistributes to other classes.
-    # BDC accounts: cap PC at 8% of AUM (regulatory ceiling, above the IPS max of 4-5%)
-    # so the drift model can naturally push moderate/breach-tier accounts over band.
+    # BDC accounts: cap PC at 6% of AUM (regulatory ceiling, above the IPS max of 4-5%)
+    # so the drift model can naturally push moderate/breach-tier accounts over band
+    # without producing extreme outliers (>8%) in the breach tier.
     non_cash_raw = {}
     for ac, v in buckets.items():
         if ac == "Cash":
@@ -218,11 +219,25 @@ for _, account in accounts_df.iterrows():
         if ac == "Private Credit":
             if not bdc_eligible:
                 continue                          # redistribute to other asset classes
-            v = min(v, account_aum * 0.08)       # regulatory ceiling above IPS max
+            v = min(v, account_aum * 0.06)       # regulatory ceiling above IPS max
         non_cash_raw[ac] = v
 
     non_cash_total  = sum(non_cash_raw.values()) or 1.0
     scaled_buckets  = {ac: v / non_cash_total * non_cash_budget for ac, v in non_cash_raw.items()}
+
+    # Post-renormalization clip: when the noise model floors multiple classes to zero,
+    # the remaining classes absorb the full non_cash_budget and can vastly exceed their
+    # IPS max. Allow up to 10pp over the IPS max (meaningful demo drift) but no more.
+    # PC uses its regulatory ceiling directly since it is tighter than max + 10pp.
+    # Excess is sent to cash; the bottom-of-loop cash reconciliation caps it naturally.
+    overflow = 0.0
+    for ac in list(scaled_buckets.keys()):
+        ceiling = (account_aum * 0.06 if ac == "Private Credit"
+                   else account_aum * (profile[ac]["max"] + 10) / 100)
+        if scaled_buckets[ac] > ceiling:
+            overflow += scaled_buckets[ac] - ceiling
+            scaled_buckets[ac] = ceiling
+    cash_target = min(cash_target + overflow, account_aum * ips_cash_max / 100)
 
     rows = []
 
@@ -253,10 +268,10 @@ for _, account in accounts_df.iterrows():
         rows += make_positions(sample, "Alternatives", alt_budget, inception_date, account_id)
 
     # ── Private Credit / BDC ───────────────────────────────────────────────────
-    # All UHNW clients are BDC-eligible; cap matches the 8% regulatory ceiling above.
+    # All UHNW clients are BDC-eligible; cap matches the 6% regulatory ceiling above.
     pc_budget = scaled_buckets.get("Private Credit", 0)
     if pc_budget > 0 and bdc_eligible and bdc_universe:
-        bdc_budget = min(pc_budget, account_aum * 0.08)
+        bdc_budget = min(pc_budget, account_aum * 0.06)
         n = int(rng.integers(1, 4))
         sample = list(rng.choice(bdc_universe, size=min(n, len(bdc_universe)), replace=False))
         rows += make_positions(sample, "Private Credit", bdc_budget, inception_date, account_id, concentration=3.0)

@@ -42,7 +42,7 @@ IPS_PROFILES = {
         "Equity":         (54.0, 44.0, 64.0),
         "Fixed Income":   (17.0,  7.0, 27.0),
         "Alternatives":   (22.0, 12.0, 32.0),
-        "Private Credit": ( 2.0,  0.0,  4.0),
+        "Private Credit": ( 2.0,  1.0,  4.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Income": {
@@ -51,7 +51,7 @@ IPS_PROFILES = {
         "Equity":         (28.0, 18.0, 38.0),
         "Fixed Income":   (47.0, 37.0, 57.0),
         "Alternatives":   (17.0,  7.0, 27.0),
-        "Private Credit": ( 3.0,  0.0,  5.0),
+        "Private Credit": ( 3.0,  1.5,  5.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Balanced": {
@@ -60,7 +60,7 @@ IPS_PROFILES = {
         "Equity":         (44.0, 34.0, 54.0),
         "Fixed Income":   (27.0, 17.0, 37.0),
         "Alternatives":   (22.0, 12.0, 32.0),
-        "Private Credit": ( 2.0,  0.0,  4.0),
+        "Private Credit": ( 2.0,  1.0,  4.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     "Alternatives-Heavy": {
@@ -69,7 +69,7 @@ IPS_PROFILES = {
         "Equity":         (32.0, 22.0, 42.0),
         "Fixed Income":   (12.0,  7.0, 22.0),
         "Alternatives":   (48.0, 38.0, 58.0),
-        "Private Credit": ( 3.0,  0.0,  5.0),
+        "Private Credit": ( 3.0,  1.5,  5.0),
         "Cash":           ( 5.0,  2.0, 10.0),
     },
     # ── HNW profiles — no Private Credit allocation ────────────────────────────
