@@ -38,6 +38,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── 1. gold_financial_fundamentals ────────────────────────────────────────────────
 
+
 # COMMAND ----------
 
 # MAGIC %sql
@@ -235,6 +236,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── 2. gold_financials_vs_estimates ──────────────────────────────────────────────
 
+
 # COMMAND ----------
 
 # MAGIC %sql
@@ -354,6 +356,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── 3. gold_portfolio_sector_exposure ─────────────────────────────────────────────
 
+
 # COMMAND ----------
 
 # MAGIC %sql
@@ -470,6 +473,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # COMMAND ----------
 
 # DBTITLE 1,─── 4. gold_ips_drift (view) ──────────────────────────────────────────────────────
+
 
 # COMMAND ----------
 
