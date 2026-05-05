@@ -7,7 +7,6 @@
 # ]
 # ///
 
-
 # COMMAND ----------
 
 # MAGIC %md
@@ -16,7 +15,7 @@
 # MAGIC Builds `silver_advisor_daily_returns` and all `gold_app_*` tables consumed by the
 # MAGIC Advisor Intelligence App and the Lakeview return-series dashboard.
 # MAGIC
-# MAGIC Run order: after `06_dashboard_tables.py` (requires `gold_ips_drift` and
+# MAGIC Run order: after `06_dashboard_tables.py` (requires
 # MAGIC `gold_unified_signals`).
 # MAGIC
 # MAGIC Run this notebook to refresh after any of the following change:
@@ -35,11 +34,6 @@
 # MAGIC | `gold_app_concentration_risk` | IPS drift heatmap for top 5 clients per advisor |
 # MAGIC | `gold_app_holdings_list` | Distinct advisor × ticker list with alert flag |
 # MAGIC | `gold_app_management_tone` | Latest management tone scores from earnings transcripts |
-# MAGIC
-# MAGIC Lakeview reference queries (no CREATE — Lakeview dataset queries only):
-# MAGIC   - Holdings by date range with ETF look-through and alpha contributions
-# MAGIC   - Signal feed and signal exposure by account
-# MAGIC   - Portfolio return series (parameterized by date range, benchmark, advisor)
 
 # COMMAND ----------
 
@@ -417,7 +411,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC %md
 # MAGIC ---
 # MAGIC ## `gold_account_ips_drift`
-# MAGIC Materialized table version of `gold_ips_drift`. One row per (account_id × asset_class).
+# MAGIC One row per (account_id × asset_class). Queried directly by the advisor app. One row per (account_id × asset_class).
 # MAGIC Queried directly by the advisor app — rebuilt here after every synthetic data refresh.
 
 # COMMAND ----------
@@ -544,13 +538,13 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC ),
 # MAGIC drift AS (
 # MAGIC   SELECT advisor_id, COUNT(*) AS drift_count
-# MAGIC   FROM ahtsa.awm.gold_ips_drift
+# MAGIC   FROM ahtsa.awm.gold_account_ips_drift
 # MAGIC   WHERE drift_status != 'Within Band' AND drift_severity = 'Critical'
 # MAGIC   GROUP BY advisor_id
 # MAGIC ),
 # MAGIC at_risk AS (
 # MAGIC   SELECT d.advisor_id, COUNT(DISTINCT a.client_id) AS clients_at_risk
-# MAGIC   FROM ahtsa.awm.gold_ips_drift d
+# MAGIC   FROM ahtsa.awm.gold_account_ips_drift d
 # MAGIC   JOIN ahtsa.awm.accounts a ON d.account_id = a.account_id
 # MAGIC   WHERE d.drift_severity = 'Critical'
 # MAGIC   GROUP BY d.advisor_id
@@ -706,7 +700,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC
 # MAGIC IPS drift (actual − target) for the **top 5 clients by AUM per advisor**.
 # MAGIC Positive `delta_pct` = overweight vs IPS target; negative = underweight.
-# MAGIC Averaged across all accounts per client using `gold_ips_drift.drift_from_target_pct`.
+# MAGIC Averaged across all accounts per client using `gold_account_ips_drift.drift_from_target_pct`.
 
 # COMMAND ----------
 
@@ -728,7 +722,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   d.asset_class,
 # MAGIC   d.client_name,
 # MAGIC   ROUND(AVG(d.drift_from_target_pct), 1) AS delta_pct
-# MAGIC FROM ahtsa.awm.gold_ips_drift d
+# MAGIC FROM ahtsa.awm.gold_account_ips_drift d
 # MAGIC JOIN top_clients tc ON d.client_id = tc.client_id
 # MAGIC GROUP BY tc.advisor_id, d.asset_class, d.client_name
 # MAGIC ORDER BY tc.advisor_id, d.asset_class, delta_pct DESC
@@ -882,37 +876,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   source_description
 # MAGIC FROM parsed
 # MAGIC ORDER BY holding_id, section_order
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Signal Feed and Signal Exposure
-# MAGIC Unified Signal Queries for Lakeview.
-# MAGIC
-# MAGIC Query 1 — Signal Feed: one row per signal, with company metadata and numeric sentiment score.
-# MAGIC Query 2 — Exposure: one row per (account × ticker × source_type × signal_type × advisor_action_needed).
-# MAGIC
-# MAGIC Lakeview parameters (Exposure query):
-# MAGIC   `:date.min`              — signal window start
-# MAGIC   `:date.max`              — signal window end
-# MAGIC   `:source_type`           — limit rollup to these source types  (multi-select)
-# MAGIC   `:signal_type`           — limit rollup to these signal types  (multi-select)
-# MAGIC   `:advisor_action_needed` — limit rollup to action-needed signals only (true/false)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Portfolio Return Series
-# MAGIC Returns a daily time series of portfolio return % vs a benchmark index,
-# MAGIC both baselined to 0% at the period start date.
-# MAGIC
-# MAGIC Parameters:
-# MAGIC   `:date.min`    — period start (date range widget)
-# MAGIC   `:date.max`    — period end   (date range widget)
-# MAGIC   `:benchmark`   — index symbol from bronze_indexes_and_vix (e.g. GSPC, DJI, IXIC)
-# MAGIC   `:advisor_id`   — optional; leave blank to include all advisors
-# MAGIC   `:account_type` — optional; leave blank to include all account types
-# MAGIC   `:ticker`       — optional; leave blank to include all tickers
 
 # COMMAND ----------
 
