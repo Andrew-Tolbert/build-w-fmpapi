@@ -424,8 +424,190 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,CREATE silver_advisor_daily_holdings
 # MAGIC %sql
-# MAGIC WITH 
+# MAGIC -- One row per (advisor_id, asset_class, as_of_date).
+# MAGIC -- Period metrics (period_pl, period_return_pct) use a rolling 365-day window
+# MAGIC -- ending on each as_of_date. Fees are similarly rolling 365 days.
+# MAGIC CREATE OR REPLACE TABLE silver_advisor_daily_holdings
+# MAGIC USING DELTA
+# MAGIC COMMENT 'Daily advisor-level AUM and performance metrics over a rolling 365-day window.'
+# MAGIC AS
+# MAGIC WITH
+# MAGIC
+# MAGIC -- ── Date spine: every trading day in the last 365 calendar days ──────────────
+# MAGIC date_spine AS (
+# MAGIC   SELECT DISTINCT date AS as_of_date
+# MAGIC   FROM bronze_historical_prices
+# MAGIC   WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+# MAGIC     AND date <= CURRENT_DATE()
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── End prices: adjClose on each spine date (spine dates are trading days) ───
+# MAGIC end_prices AS (
+# MAGIC   SELECT date AS as_of_date, symbol, adjClose AS end_price
+# MAGIC   FROM bronze_historical_prices
+# MAGIC   WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+# MAGIC     AND date <= CURRENT_DATE()
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Nearest trading day 365 days before each spine date ──────────────────────
+# MAGIC -- Handles weekends/holidays at the period boundary; used for rolling-year return.
+# MAGIC start_price_dates AS (
+# MAGIC   SELECT
+# MAGIC     ds.as_of_date,
+# MAGIC     MAX(hp.date) AS start_price_dt
+# MAGIC   FROM date_spine ds
+# MAGIC   JOIN bronze_historical_prices hp
+# MAGIC     ON hp.date <= DATE_SUB(ds.as_of_date, 365)
+# MAGIC   GROUP BY ds.as_of_date
+# MAGIC ),
+# MAGIC
+# MAGIC start_prices AS (
+# MAGIC   SELECT spd.as_of_date, hp.symbol, hp.adjClose AS start_price
+# MAGIC   FROM start_price_dates spd
+# MAGIC   JOIN bronze_historical_prices hp ON hp.date = spd.start_price_dt
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Equity positions as of each spine date ────────────────────────────────────
+# MAGIC equity_positions AS (
+# MAGIC   SELECT
+# MAGIC     ds.as_of_date,
+# MAGIC     t.account_id,
+# MAGIC     t.ticker,
+# MAGIC     SUM(t.quantity)     AS quantity,
+# MAGIC     SUM(t.gross_amount) AS total_cost
+# MAGIC   FROM date_spine ds
+# MAGIC   CROSS JOIN transactions t
+# MAGIC   WHERE t.action IN ('BUY', 'DRIP')
+# MAGIC     AND t.ticker != 'CASH'
+# MAGIC     AND t.date <= ds.as_of_date
+# MAGIC   GROUP BY ds.as_of_date, t.account_id, t.ticker
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Cash balances as of each spine date ───────────────────────────────────────
+# MAGIC cash_positions AS (
+# MAGIC   SELECT
+# MAGIC     ds.as_of_date,
+# MAGIC     t.account_id,
+# MAGIC     GREATEST(0.0,
+# MAGIC       SUM(CASE WHEN t.action = 'BUY'      AND t.ticker = 'CASH' THEN t.quantity   ELSE 0.0 END)
+# MAGIC     + SUM(CASE WHEN t.action = 'DIVIDEND'                        THEN t.net_amount ELSE 0.0 END)
+# MAGIC     + SUM(CASE WHEN t.action = 'DRIP'                            THEN t.net_amount ELSE 0.0 END)
+# MAGIC     + SUM(CASE WHEN t.action = 'FEE'                             THEN t.net_amount ELSE 0.0 END)
+# MAGIC     ) AS cash_balance
+# MAGIC   FROM date_spine ds
+# MAGIC   CROSS JOIN transactions t
+# MAGIC   WHERE t.date <= ds.as_of_date
+# MAGIC   GROUP BY ds.as_of_date, t.account_id
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Asset class reference ─────────────────────────────────────────────────────
+# MAGIC asset_class_ref AS (
+# MAGIC   SELECT DISTINCT account_id, ticker, asset_class
+# MAGIC   FROM holdings
+# MAGIC   WHERE ticker != 'CASH'
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Equity rows with end and start valuations ─────────────────────────────────
+# MAGIC -- When no start price exists (position is newer than 365 days), fall back to
+# MAGIC -- end_price so period_pl / period_return_pct reflect inception-to-date, not NaN.
+# MAGIC equity_rows AS (
+# MAGIC   SELECT
+# MAGIC     ep.as_of_date,
+# MAGIC     ep.account_id,
+# MAGIC     COALESCE(ac.asset_class, 'Equity')                              AS asset_class,
+# MAGIC     ep.quantity * epr.end_price                                     AS market_value,
+# MAGIC     ep.total_cost                                                   AS total_cost_basis,
+# MAGIC     ep.quantity * epr.end_price - ep.total_cost                     AS unrealized_gl,
+# MAGIC     ep.quantity * COALESCE(spr.start_price, epr.end_price)          AS mv_at_period_start
+# MAGIC   FROM equity_positions ep
+# MAGIC   JOIN end_prices   epr ON ep.as_of_date = epr.as_of_date AND ep.ticker = epr.symbol
+# MAGIC   LEFT JOIN start_prices spr ON ep.as_of_date = spr.as_of_date AND ep.ticker = spr.symbol
+# MAGIC   LEFT JOIN asset_class_ref ac ON ep.account_id = ac.account_id AND ep.ticker = ac.ticker
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Cash rows per spine date ──────────────────────────────────────────────────
+# MAGIC -- Cash value is 1:1; no price appreciation so mv_at_period_start = market_value.
+# MAGIC cash_rows AS (
+# MAGIC   SELECT
+# MAGIC     as_of_date,
+# MAGIC     account_id,
+# MAGIC     'Cash'       AS asset_class,
+# MAGIC     cash_balance AS market_value,
+# MAGIC     cash_balance AS total_cost_basis,
+# MAGIC     0.0          AS unrealized_gl,
+# MAGIC     cash_balance AS mv_at_period_start
+# MAGIC   FROM cash_positions
+# MAGIC   WHERE cash_balance > 0
+# MAGIC ),
+# MAGIC
+# MAGIC all_holdings AS (
+# MAGIC   SELECT * FROM equity_rows
+# MAGIC   UNION ALL
+# MAGIC   SELECT * FROM cash_rows
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Advisory fees: rolling 365-day window ending on each spine date ───────────
+# MAGIC period_fees AS (
+# MAGIC   SELECT
+# MAGIC     ds.as_of_date,
+# MAGIC     t.account_id,
+# MAGIC     ABS(SUM(t.net_amount)) AS fees_paid
+# MAGIC   FROM date_spine ds
+# MAGIC   CROSS JOIN transactions t
+# MAGIC   WHERE t.action = 'FEE'
+# MAGIC     AND t.date BETWEEN DATE_SUB(ds.as_of_date, 365) AND ds.as_of_date
+# MAGIC   GROUP BY ds.as_of_date, t.account_id
+# MAGIC ),
+# MAGIC
+# MAGIC -- ── Position-level with fee proration by account weight ───────────────────────
+# MAGIC -- Window function computed here so it doesn't nest inside the GROUP BY below.
+# MAGIC position_with_fees AS (
+# MAGIC   SELECT
+# MAGIC     ah.as_of_date,
+# MAGIC     ah.account_id,
+# MAGIC     c.client_id,
+# MAGIC     c.advisor_id,
+# MAGIC     ah.asset_class,
+# MAGIC     ah.market_value,
+# MAGIC     ah.total_cost_basis,
+# MAGIC     ah.unrealized_gl,
+# MAGIC     ah.mv_at_period_start,
+# MAGIC     COALESCE(pf.fees_paid, 0)
+# MAGIC       * ah.market_value
+# MAGIC       / NULLIF(SUM(ah.market_value) OVER (PARTITION BY ah.as_of_date, ah.account_id), 0)
+# MAGIC     AS fees_attributed
+# MAGIC   FROM all_holdings ah
+# MAGIC   JOIN accounts a ON ah.account_id = a.account_id
+# MAGIC   JOIN clients  c ON a.client_id   = c.client_id
+# MAGIC   LEFT JOIN period_fees pf ON ah.as_of_date = pf.as_of_date AND ah.account_id = pf.account_id
+# MAGIC )
+# MAGIC
+# MAGIC -- ── Final: advisor × asset_class × date ──────────────────────────────────────
+# MAGIC SELECT
+# MAGIC   as_of_date,
+# MAGIC   advisor_id,
+# MAGIC   asset_class,
+# MAGIC   ROUND(SUM(market_value),                                                       2) AS total_aum,
+# MAGIC   ROUND(SUM(total_cost_basis),                                                   2) AS total_cost_basis,
+# MAGIC   ROUND(SUM(unrealized_gl),                                                      2) AS total_unrealized_gl,
+# MAGIC   ROUND(SUM(mv_at_period_start),                                                 2) AS aum_at_period_start,
+# MAGIC   ROUND(SUM(market_value) - SUM(mv_at_period_start),                             2) AS period_pl,
+# MAGIC   ROUND(
+# MAGIC     (SUM(market_value) - SUM(mv_at_period_start))
+# MAGIC     / NULLIF(SUM(mv_at_period_start), 0) * 100,                                 4) AS period_return_pct,
+# MAGIC   ROUND(SUM(fees_attributed),                                                    2) AS fees_attributed,
+# MAGIC   COUNT(DISTINCT account_id)                                                        AS num_accounts,
+# MAGIC   COUNT(DISTINCT client_id)                                                         AS num_clients
+# MAGIC FROM position_with_fees
+# MAGIC GROUP BY as_of_date, advisor_id, asset_class
+# MAGIC ORDER BY advisor_id, as_of_date, asset_class
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC WITH
 # MAGIC params AS (
 # MAGIC   SELECT
 # MAGIC     DATE('2026-02-27') AS start_dt,
