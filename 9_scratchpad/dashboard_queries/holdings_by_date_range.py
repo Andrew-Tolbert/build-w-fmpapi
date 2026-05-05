@@ -424,19 +424,22 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,Timeseries Return by Advisor vs S&P 500 — Lakeview
+# DBTITLE 1,CREATE silver_advisor_daily_returns
 # MAGIC %sql
-# MAGIC -- Portfolio and S&P 500 return timeseries, one row per (date, advisor_id).
-# MAGIC -- All series are indexed to 0% at the nearest trading day on or before date.min.
-# MAGIC -- advisor_id is a dimension (not a filter) — all advisors appear in every run.
-# MAGIC -- Alpha = portfolio_return_after_fees − benchmark_return (both indexed to same base).
+# MAGIC -- One row per (date, advisor_id). Covers the trailing 365 calendar days.
+# MAGIC -- All series indexed to 0% at the nearest trading day on or before the window open.
+# MAGIC -- Alpha = portfolio_return_after_fees − benchmark_return (S&P 500).
+# MAGIC CREATE OR REPLACE TABLE silver_advisor_daily_returns
+# MAGIC USING DELTA
+# MAGIC COMMENT 'Daily portfolio vs S&P 500 return timeseries per advisor, trailing 365 days.'
+# MAGIC AS
 # MAGIC WITH
 # MAGIC
-# MAGIC -- ── Parameters ───────────────────────────────────────────────────────────────
+# MAGIC -- ── Window: trailing 365 calendar days ───────────────────────────────────────
 # MAGIC params AS (
 # MAGIC   SELECT
-# MAGIC     :date.min AS start_dt,
-# MAGIC     :date.max AS end_dt
+# MAGIC     DATE_SUB(CURRENT_DATE(), 365) AS start_dt,
+# MAGIC     CURRENT_DATE()                AS end_dt
 # MAGIC ),
 # MAGIC
 # MAGIC -- ── Nearest available trading day on or before each bound ────────────────────
