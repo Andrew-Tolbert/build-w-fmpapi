@@ -185,7 +185,7 @@ else:
                 LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
                     ON g.signal_id = CASE
                         WHEN u.section_label = 'overall'
-                        THEN md5(CONCAT(u.symbol, '|', CAST(u.year AS STRING), '|', CAST(u.quarter AS STRING), '|management_tone_overall'))
+                        THEN md5(CONCAT(u.symbol, '|', CAST(u.year AS STRING), '|', CAST(u.quarter AS STRING), '|', 'management_tone_overall'))
                         ELSE md5(CONCAT(u.symbol, '|', CAST(u.year AS STRING), '|', CAST(u.quarter AS STRING), '|', u.section_label, '|management_tone'))
                     END
                 WHERE u.section_text IS NOT NULL AND LENGTH(TRIM(u.section_text)) > 100
@@ -254,7 +254,7 @@ else:
             SELECT
                 CASE
                     WHEN section_label = 'overall'
-                    THEN md5(CONCAT(symbol, '|', CAST(year AS STRING), '|', CAST(quarter AS STRING), '|management_tone_overall'))
+                    THEN md5(CONCAT(symbol, '|', CAST(year AS STRING), '|', CAST(quarter AS STRING), '|', 'management_tone_overall'))
                     ELSE md5(CONCAT(symbol, '|', CAST(year AS STRING), '|', CAST(quarter AS STRING), '|', section_label, '|management_tone'))
                 END                                                                   AS signal_id,
                 symbol,
@@ -411,7 +411,7 @@ else:
                 LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
                     ON g.signal_id = CASE
                         WHEN u.section_label = 'overall'
-                        THEN md5(CONCAT(u.symbol, '|', u.accession, '|management_tone_overall'))
+                        THEN md5(CONCAT(u.symbol, '|', u.accession, '|', 'management_tone_overall'))
                         ELSE md5(CONCAT(u.symbol, '|', u.accession, '|', u.section_label, '|management_tone'))
                     END
                 WHERE u.section_text IS NOT NULL AND LENGTH(TRIM(u.section_text)) > 100
@@ -485,7 +485,7 @@ else:
             SELECT
                 CASE
                     WHEN section_label = 'overall'
-                    THEN md5(CONCAT(symbol, '|', accession, '|management_tone_overall'))
+                    THEN md5(CONCAT(symbol, '|', accession, '|', 'management_tone_overall'))
                     ELSE md5(CONCAT(symbol, '|', accession, '|', section_label, '|management_tone'))
                 END                                                                   AS signal_id,
                 symbol,
