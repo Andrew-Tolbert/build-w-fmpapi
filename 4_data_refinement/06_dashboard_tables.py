@@ -60,6 +60,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── SECTION A: TABLE CREATION ──────────────────────────────────────────────────
 
+
 # COMMAND ----------
 
 # # Uncomment to drop and fully rebuild
@@ -265,103 +266,104 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── SECTION B: LAKEVIEW DATASET QUERY ──────────────────────────────────────────
 
+
 # COMMAND ----------
 
 # DBTITLE 1,[LAKEVIEW] Financial Fundamentals — Time Series Dataset
-# MAGIC %sql
-# MAGIC -- Single dataset for all financial dashboard visualizations.
-# MAGIC -- One row per (symbol, fiscal period, date). Lakeview aggregates on the front end:
-# MAGIC --   • Trend chart:      filter by :ticker, plot any metric vs date
-# MAGIC --   • Peer comparison:  filter by :sector, group by symbol, latest period only
-# MAGIC --   • Leverage scan:    no filters, group by leverage_flag
-# MAGIC --   • Margin analysis:  filter by :ticker or :sector, plot margin columns vs date
-# MAGIC --
-# MAGIC -- Dollar amounts scaled to $M. Raw values available in gold_financial_fundamentals.
-# MAGIC SELECT
-# MAGIC   symbol,
-# MAGIC   date,
-# MAGIC   fiscal_year,
-# MAGIC   period,
-# MAGIC   company_name,
-# MAGIC   sector,
-# MAGIC   industry,
-# MAGIC   is_etf,
-# MAGIC   leverage_flag,
-# MAGIC
-# MAGIC   -- Income ($M)
-# MAGIC   ROUND(revenue          / 1e6, 2) AS revenue_m,
-# MAGIC   ROUND(gross_profit     / 1e6, 2) AS gross_profit_m,
-# MAGIC   ROUND(ebitda           / 1e6, 2) AS ebitda_m,
-# MAGIC   ROUND(net_income       / 1e6, 2) AS net_income_m,
-# MAGIC   ROUND(interest_expense / 1e6, 2) AS interest_expense_m,
-# MAGIC   eps_diluted,
-# MAGIC
-# MAGIC   -- Margins (%)
-# MAGIC   gross_profit_margin,
-# MAGIC   ebitda_margin,
-# MAGIC   net_profit_margin,
-# MAGIC   operating_margin,
-# MAGIC
-# MAGIC   -- Leverage / Credit
-# MAGIC   net_debt_to_ebitda,
-# MAGIC   interest_coverage,
-# MAGIC   dscr,
-# MAGIC   debt_to_assets,
-# MAGIC   ROUND(net_debt   / 1e6, 2) AS net_debt_m,
-# MAGIC   ROUND(total_debt / 1e6, 2) AS total_debt_m,
-# MAGIC   forward_nd_ebitda,
-# MAGIC
-# MAGIC   -- Valuation
-# MAGIC   pe_ratio,
-# MAGIC   pb_ratio,
-# MAGIC   ps_ratio,
-# MAGIC   ev_to_ebitda,
-# MAGIC   earnings_yield,
-# MAGIC   dividend_yield,
-# MAGIC   fcf_yield,
-# MAGIC   current_price,
-# MAGIC   price_target_consensus,
-# MAGIC   analyst_upside_pct,
-# MAGIC   analyst_consensus,
-# MAGIC
-# MAGIC   -- Growth YoY (%)
-# MAGIC   revenue_growth_yoy,
-# MAGIC   ebitda_growth_yoy,
-# MAGIC   net_income_growth_yoy,
-# MAGIC   eps_growth_yoy,
-# MAGIC   eps_diluted_growth_yoy,
-# MAGIC
-# MAGIC   -- Returns
-# MAGIC   roe,
-# MAGIC   roa,
-# MAGIC   roic,
-# MAGIC
-# MAGIC   -- Cash Flow ($M)
-# MAGIC   ROUND(free_cash_flow      / 1e6, 2) AS free_cash_flow_m,
-# MAGIC   ROUND(operating_cash_flow / 1e6, 2) AS operating_cash_flow_m,
-# MAGIC   ROUND(capex               / 1e6, 2) AS capex_m,
-# MAGIC
-# MAGIC   -- Balance Sheet ($M)
-# MAGIC   ROUND(total_assets  / 1e6, 2) AS total_assets_m,
-# MAGIC   ROUND(total_equity  / 1e6, 2) AS total_equity_m,
-# MAGIC   ROUND(cash          / 1e6, 2) AS cash_m,
-# MAGIC
-# MAGIC   -- Market context
-# MAGIC   ROUND(market_cap / 1e9, 2) AS market_cap_b,
-# MAGIC   beta,
-# MAGIC
-# MAGIC   -- Analyst context
-# MAGIC   ROUND(est_ebitda / 1e6, 2) AS est_ebitda_m,
-# MAGIC   est_eps,
-# MAGIC   num_analysts_revenue
-# MAGIC
-# MAGIC FROM gold_financial_fundamentals
-# MAGIC WHERE
-# MAGIC   (:ticker  IS NULL OR array_contains(:ticker,  symbol))
-# MAGIC   AND (:sector  IS NULL OR array_contains(:sector,  sector))
-# MAGIC   AND (date >= :date.min OR :date.min IS NULL)
-# MAGIC   AND (date <= :date.max OR :date.max IS NULL)
-# MAGIC ORDER BY symbol, date DESC
+# %sql
+# -- Single dataset for all financial dashboard visualizations.
+# -- One row per (symbol, fiscal period, date). Lakeview aggregates on the front end:
+# --   • Trend chart:      filter by :ticker, plot any metric vs date
+# --   • Peer comparison:  filter by :sector, group by symbol, latest period only
+# --   • Leverage scan:    no filters, group by leverage_flag
+# --   • Margin analysis:  filter by :ticker or :sector, plot margin columns vs date
+# --
+# -- Dollar amounts scaled to $M. Raw values available in gold_financial_fundamentals.
+# SELECT
+#   symbol,
+#   date,
+#   fiscal_year,
+#   period,
+#   company_name,
+#   sector,
+#   industry,
+#   is_etf,
+#   leverage_flag,
+
+#   -- Income ($M)
+#   ROUND(revenue          / 1e6, 2) AS revenue_m,
+#   ROUND(gross_profit     / 1e6, 2) AS gross_profit_m,
+#   ROUND(ebitda           / 1e6, 2) AS ebitda_m,
+#   ROUND(net_income       / 1e6, 2) AS net_income_m,
+#   ROUND(interest_expense / 1e6, 2) AS interest_expense_m,
+#   eps_diluted,
+
+#   -- Margins (%)
+#   gross_profit_margin,
+#   ebitda_margin,
+#   net_profit_margin,
+#   operating_margin,
+
+#   -- Leverage / Credit
+#   net_debt_to_ebitda,
+#   interest_coverage,
+#   dscr,
+#   debt_to_assets,
+#   ROUND(net_debt   / 1e6, 2) AS net_debt_m,
+#   ROUND(total_debt / 1e6, 2) AS total_debt_m,
+#   forward_nd_ebitda,
+
+#   -- Valuation
+#   pe_ratio,
+#   pb_ratio,
+#   ps_ratio,
+#   ev_to_ebitda,
+#   earnings_yield,
+#   dividend_yield,
+#   fcf_yield,
+#   current_price,
+#   price_target_consensus,
+#   analyst_upside_pct,
+#   analyst_consensus,
+
+#   -- Growth YoY (%)
+#   revenue_growth_yoy,
+#   ebitda_growth_yoy,
+#   net_income_growth_yoy,
+#   eps_growth_yoy,
+#   eps_diluted_growth_yoy,
+
+#   -- Returns
+#   roe,
+#   roa,
+#   roic,
+
+#   -- Cash Flow ($M)
+#   ROUND(free_cash_flow      / 1e6, 2) AS free_cash_flow_m,
+#   ROUND(operating_cash_flow / 1e6, 2) AS operating_cash_flow_m,
+#   ROUND(capex               / 1e6, 2) AS capex_m,
+
+#   -- Balance Sheet ($M)
+#   ROUND(total_assets  / 1e6, 2) AS total_assets_m,
+#   ROUND(total_equity  / 1e6, 2) AS total_equity_m,
+#   ROUND(cash          / 1e6, 2) AS cash_m,
+
+#   -- Market context
+#   ROUND(market_cap / 1e9, 2) AS market_cap_b,
+#   beta,
+
+#   -- Analyst context
+#   ROUND(est_ebitda / 1e6, 2) AS est_ebitda_m,
+#   est_eps,
+#   num_analysts_revenue
+
+# FROM gold_financial_fundamentals
+# WHERE
+#   (:ticker  IS NULL OR array_contains(:ticker,  symbol))
+#   AND (:sector  IS NULL OR array_contains(:sector,  sector))
+#   AND (date >= :date.min OR :date.min IS NULL)
+#   AND (date <= :date.max OR :date.max IS NULL)
+# ORDER BY symbol, date DESC
 
 # COMMAND ----------
 
@@ -601,6 +603,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── SECTION D: FINANCIALS VS ESTIMATES ─────────────────────────────────────────
 
+
 # COMMAND ----------
 
 # DBTITLE 1,gold_financials_vs_estimates — One Row per (Symbol, Period) with Beat/Miss
@@ -734,59 +737,59 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # COMMAND ----------
 
 # DBTITLE 1,[LAKEVIEW] Financials vs Estimates — Beat/Miss Dataset
-# MAGIC %sql
-# MAGIC -- Single dataset for all beat/miss dashboard visualizations.
-# MAGIC -- One row per (symbol, fiscal period). Lakeview filters/aggregates on the front end:
-# MAGIC --   • Beat/miss bar: filter by :ticker or :sector, bar chart by period
-# MAGIC --   • Surprise scatter: eps_surprise_pct vs revenue_surprise_pct per symbol
-# MAGIC --   • Consistency table: group by symbol, count beats over N periods
-# MAGIC --   • Sector heat: filter by :sector, color by combined_beat_miss
-# MAGIC SELECT
-# MAGIC   symbol,
-# MAGIC   company_name,
-# MAGIC   sector,
-# MAGIC   industry,
-# MAGIC   is_etf,
-# MAGIC   period_end,
-# MAGIC   fiscal_year,
-# MAGIC   period,
-# MAGIC
-# MAGIC   -- Actuals
-# MAGIC   actual_revenue_m,
-# MAGIC   actual_ebitda_m,
-# MAGIC   actual_net_income_m,
-# MAGIC   actual_eps,
-# MAGIC
-# MAGIC   -- Estimates
-# MAGIC   est_revenue_m,
-# MAGIC   est_revenue_low_m,
-# MAGIC   est_revenue_high_m,
-# MAGIC   est_ebitda_m,
-# MAGIC   est_eps,
-# MAGIC   est_eps_low,
-# MAGIC   est_eps_high,
-# MAGIC   num_analysts_eps,
-# MAGIC
-# MAGIC   -- Surprises
-# MAGIC   eps_surprise_pct,
-# MAGIC   eps_surprise_abs,
-# MAGIC   revenue_surprise_pct,
-# MAGIC   revenue_surprise_m,
-# MAGIC   ebitda_surprise_pct,
-# MAGIC
-# MAGIC   -- Beat/Miss
-# MAGIC   eps_beat_miss,
-# MAGIC   revenue_beat_miss,
-# MAGIC   combined_beat_miss
-# MAGIC
-# MAGIC FROM gold_financials_vs_estimates
-# MAGIC WHERE
-# MAGIC   (:ticker IS NULL OR array_contains(:ticker, symbol))
-# MAGIC   AND (:sector IS NULL OR array_contains(:sector, sector))
-# MAGIC   AND (period_end >= :date.min OR :date.min IS NULL)
-# MAGIC   AND (period_end <= :date.max OR :date.max IS NULL)
-# MAGIC   AND (is_etf = false OR is_etf IS NULL)
-# MAGIC ORDER BY symbol, period_end DESC
+# %sql
+# -- Single dataset for all beat/miss dashboard visualizations.
+# -- One row per (symbol, fiscal period). Lakeview filters/aggregates on the front end:
+# --   • Beat/miss bar: filter by :ticker or :sector, bar chart by period
+# --   • Surprise scatter: eps_surprise_pct vs revenue_surprise_pct per symbol
+# --   • Consistency table: group by symbol, count beats over N periods
+# --   • Sector heat: filter by :sector, color by combined_beat_miss
+# SELECT
+#   symbol,
+#   company_name,
+#   sector,
+#   industry,
+#   is_etf,
+#   period_end,
+#   fiscal_year,
+#   period,
+
+#   -- Actuals
+#   actual_revenue_m,
+#   actual_ebitda_m,
+#   actual_net_income_m,
+#   actual_eps,
+
+#   -- Estimates
+#   est_revenue_m,
+#   est_revenue_low_m,
+#   est_revenue_high_m,
+#   est_ebitda_m,
+#   est_eps,
+#   est_eps_low,
+#   est_eps_high,
+#   num_analysts_eps,
+
+#   -- Surprises
+#   eps_surprise_pct,
+#   eps_surprise_abs,
+#   revenue_surprise_pct,
+#   revenue_surprise_m,
+#   ebitda_surprise_pct,
+
+#   -- Beat/Miss
+#   eps_beat_miss,
+#   revenue_beat_miss,
+#   combined_beat_miss
+
+# FROM gold_financials_vs_estimates
+# WHERE
+#   (:ticker IS NULL OR array_contains(:ticker, symbol))
+#   AND (:sector IS NULL OR array_contains(:sector, sector))
+#   AND (period_end >= :date.min OR :date.min IS NULL)
+#   AND (period_end <= :date.max OR :date.max IS NULL)
+#   AND (is_etf = false OR is_etf IS NULL)
+# ORDER BY symbol, period_end DESC
 
 # COMMAND ----------
 
@@ -916,6 +919,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # COMMAND ----------
 
 # DBTITLE 1,─── SECTION A: GOLD TABLE CREATION ─────────────────────────────────────────────
+
 
 # COMMAND ----------
 
@@ -1054,47 +1058,6 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 #   :client_id    — client ID      (multi-select)
 #   :sector       — sector         (multi-select)
 #   :source_type  — 'ETF' or 'Direct'
-
-# COMMAND ----------
-
-# DBTITLE 1,[LAKEVIEW] Sector Exposure — Base Dataset
-# MAGIC %sql
-# MAGIC -- One row per (account_id, source_ticker, sector).
-# MAGIC -- ETF positions are pre-expanded by sector weight in gold_portfolio_sector_exposure.
-# MAGIC -- All financial metrics are pre-scaled by weight_in_source and remain additive:
-# MAGIC --   SUM(exposure_market_value)  → total market value for that sector slice
-# MAGIC --   SUM(exposure_unrealized_gl) → total unrealized G/L for that sector slice
-# MAGIC --   SUM(exposure_cost_basis)    → total cost basis for that sector slice
-# MAGIC --   SUM(exposure_unrealized_gl) / SUM(exposure_cost_basis) → unrealized return %
-# MAGIC SELECT
-# MAGIC   e.account_id,
-# MAGIC   e.account_name,
-# MAGIC   e.account_type,
-# MAGIC   e.client_id,
-# MAGIC   e.client_name,
-# MAGIC   e.advisor_id,
-# MAGIC   e.tier,
-# MAGIC   e.risk_profile,
-# MAGIC   e.source_ticker,
-# MAGIC   e.source_name,
-# MAGIC   e.source_asset_class,
-# MAGIC   e.source_type,
-# MAGIC   e.constituent_ticker,
-# MAGIC   e.sector,
-# MAGIC   e.industry,
-# MAGIC   e.weight_in_source,
-# MAGIC   e.exposure_market_value,
-# MAGIC   e.exposure_unrealized_gl,
-# MAGIC   e.exposure_cost_basis,
-# MAGIC   e.current_price,
-# MAGIC   e.cost_basis_per_share
-# MAGIC FROM gold_portfolio_sector_exposure e
-# MAGIC WHERE
-# MAGIC   (array_contains(:advisor_id,   e.advisor_id)   OR :advisor_id   IS NULL)
-# MAGIC   AND (array_contains(:account_type, e.account_type) OR :account_type IS NULL)
-# MAGIC   AND (array_contains(:client_id,    e.client_id)    OR :client_id    IS NULL)
-# MAGIC   AND (array_contains(:sector,       e.sector)       OR :sector       IS NULL)
-# MAGIC   AND (e.source_type = :source_type                  OR :source_type  IS NULL)
 
 # COMMAND ----------
 
@@ -1242,282 +1205,12 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 
 # DBTITLE 1,─── 4. gold_ips_drift (view) ──────────────────────────────────────────────────────
 
-# COMMAND ----------
-
-# DBTITLE 1,gold_ips_drift — View (SELECT * for Lakeview / Genie)
-# MAGIC %sql
-# MAGIC -- One row per (account_id, asset_class). Query this view directly in Lakeview
-# MAGIC -- and Genie — filter and aggregate on the front end.
-# MAGIC -- holdings.asset_class is already the true economic class — ETFs reclassified at
-# MAGIC -- write time via bronze_etf_info in 07_validate_and_rebuild_holdings.py.
-# MAGIC -- Asset classes with zero holdings still appear via cross-join so every IPS cell is visible.
-# MAGIC CREATE OR REPLACE VIEW gold_ips_drift AS
-# MAGIC WITH
-# MAGIC
-# MAGIC -- ── Total value per account ───────────────────────────────────────────────────
-# MAGIC account_totals AS (
-# MAGIC   SELECT
-# MAGIC     account_id,
-# MAGIC     SUM(market_value) AS total_account_value
-# MAGIC   FROM holdings
-# MAGIC   GROUP BY account_id
-# MAGIC ),
-# MAGIC
-# MAGIC -- ── Actual holdings by (account, asset_class) ────────────────────────────────
-# MAGIC actual_by_class AS (
-# MAGIC   SELECT
-# MAGIC     account_id,
-# MAGIC     asset_class,
-# MAGIC     SUM(market_value) AS actual_market_value,
-# MAGIC     COUNT(*)          AS positions_count
-# MAGIC   FROM holdings
-# MAGIC   GROUP BY account_id, asset_class
-# MAGIC ),
-# MAGIC
-# MAGIC -- ── Every (account × IPS asset class) cell ───────────────────────────────────
-# MAGIC -- Ensures zero-held asset classes still show up as rows.
-# MAGIC account_class_grid AS (
-# MAGIC   SELECT
-# MAGIC     a.account_id,
-# MAGIC     it.asset_class
-# MAGIC   FROM (SELECT DISTINCT account_id FROM holdings) a
-# MAGIC   CROSS JOIN (SELECT DISTINCT asset_class FROM ips_targets) it
-# MAGIC ),
-# MAGIC
-# MAGIC SELECT
-# MAGIC   -- ── Identity ──────────────────────────────────────────────────────────────
-# MAGIC   c.advisor_id,
-# MAGIC   c.client_id,
-# MAGIC   c.client_name,
-# MAGIC   c.tier,
-# MAGIC   c.risk_profile,
-# MAGIC   ac.account_id,
-# MAGIC   ac.account_name,
-# MAGIC   ac.account_type,
-# MAGIC   g.asset_class,
-# MAGIC
-# MAGIC   -- ── Actuals ───────────────────────────────────────────────────────────────
-# MAGIC   ROUND(COALESCE(ab.actual_market_value, 0), 2)              AS actual_market_value,
-# MAGIC   ROUND(at.total_account_value, 2)                           AS total_account_value,
-# MAGIC   COALESCE(ab.positions_count, 0)                            AS positions_count,
-# MAGIC   ROUND(
-# MAGIC     COALESCE(ab.actual_market_value, 0)
-# MAGIC     / NULLIF(at.total_account_value, 0) * 100, 4)            AS actual_allocation_pct,
-# MAGIC
-# MAGIC   -- ── IPS targets ───────────────────────────────────────────────────────────
-# MAGIC   it.target_allocation_pct,
-# MAGIC   it.min_allocation_pct,
-# MAGIC   it.max_allocation_pct,
-# MAGIC   it.rebalance_trigger_pct,
-# MAGIC   ROUND(it.target_allocation_pct / 100 * at.total_account_value, 2) AS target_market_value,
-# MAGIC   ROUND(it.min_allocation_pct    / 100 * at.total_account_value, 2) AS min_market_value,
-# MAGIC   ROUND(it.max_allocation_pct    / 100 * at.total_account_value, 2) AS max_market_value,
-# MAGIC
-# MAGIC   -- ── Drift ─────────────────────────────────────────────────────────────────
-# MAGIC   ROUND(
-# MAGIC     COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC     - it.target_allocation_pct, 4)                           AS drift_from_target_pct,
-# MAGIC
-# MAGIC   ROUND(GREATEST(0,
-# MAGIC     COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC     - it.max_allocation_pct,
-# MAGIC     it.min_allocation_pct
-# MAGIC     - COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC   ), 4)                                                      AS out_of_bounds_pct,
-# MAGIC
-# MAGIC   ROUND(
-# MAGIC     CASE
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            > it.max_allocation_pct
-# MAGIC       THEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            - it.max_allocation_pct
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            < it.min_allocation_pct
-# MAGIC       THEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            - it.min_allocation_pct
-# MAGIC       ELSE -LEAST(
-# MAGIC              it.max_allocation_pct
-# MAGIC              - COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100,
-# MAGIC              COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC              - it.min_allocation_pct)
-# MAGIC     END, 4)                                                  AS band_distance_pct,
-# MAGIC
-# MAGIC   -- ── Breach flags ──────────────────────────────────────────────────────────
-# MAGIC   CASE
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          > it.max_allocation_pct THEN 'Over Band'
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          < it.min_allocation_pct THEN 'Under Band'
-# MAGIC     ELSE 'Within Band'
-# MAGIC   END                                                        AS drift_status,
-# MAGIC
-# MAGIC   CASE
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          > it.max_allocation_pct + it.rebalance_trigger_pct THEN 'Critical'
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          < it.min_allocation_pct - it.rebalance_trigger_pct THEN 'Critical'
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          > it.max_allocation_pct                             THEN 'Warning'
-# MAGIC     WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC          < it.min_allocation_pct                             THEN 'Warning'
-# MAGIC     ELSE 'OK'
-# MAGIC   END                                                        AS drift_severity,
-# MAGIC
-# MAGIC   -- ── Rebalance amounts ─────────────────────────────────────────────────────
-# MAGIC   ROUND(
-# MAGIC     it.target_allocation_pct / 100 * at.total_account_value
-# MAGIC     - COALESCE(ab.actual_market_value, 0), 2)                AS rebalance_to_target,
-# MAGIC
-# MAGIC   ROUND(
-# MAGIC     CASE
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            > it.max_allocation_pct
-# MAGIC       THEN it.max_allocation_pct / 100 * at.total_account_value
-# MAGIC            - COALESCE(ab.actual_market_value, 0)
-# MAGIC       WHEN COALESCE(ab.actual_market_value, 0) / NULLIF(at.total_account_value, 0) * 100
-# MAGIC            < it.min_allocation_pct
-# MAGIC       THEN it.min_allocation_pct / 100 * at.total_account_value
-# MAGIC            - COALESCE(ab.actual_market_value, 0)
-# MAGIC       ELSE 0
-# MAGIC     END, 2)                                                  AS rebalance_to_band
-# MAGIC
-# MAGIC FROM account_class_grid g
-# MAGIC JOIN accounts    ac ON g.account_id  = ac.account_id
-# MAGIC JOIN clients     c  ON ac.client_id  = c.client_id
-# MAGIC JOIN account_totals at ON g.account_id = at.account_id
-# MAGIC JOIN ips_targets it ON c.risk_profile = it.risk_profile
-# MAGIC                     AND g.asset_class  = it.asset_class
-# MAGIC LEFT JOIN actual_by_class ab
-# MAGIC   ON g.account_id = ab.account_id AND g.asset_class = ab.asset_class
 
 # COMMAND ----------
 
 # DBTITLE 1,─── SECTION B: GENIE CONTEXT QUERIES ─────────────────────────────────────────
 # Static SQL designed for Genie space context.
 # Paste each block into Genie alongside its suggested question.
-
-# COMMAND ----------
-
-# DBTITLE 1,[GENIE] "Which clients have the worst IPS drift?"
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   client_id,
-# MAGIC   client_name,
-# MAGIC   advisor_id,
-# MAGIC   tier,
-# MAGIC   risk_profile,
-# MAGIC   ROUND(SUM(actual_market_value) / 1e6, 3)                   AS client_aum_m,
-# MAGIC   ROUND(AVG(ABS(drift_from_target_pct)), 4)                  AS drift_score,
-# MAGIC   SUM(CASE WHEN drift_status != 'Within Band' THEN 1 ELSE 0 END) AS breach_count,
-# MAGIC   ROUND(SUM(ABS(rebalance_to_band)) / 1e6, 3)                AS total_rebalance_abs_m
-# MAGIC FROM gold_ips_drift
-# MAGIC GROUP BY client_id, client_name, advisor_id, tier, risk_profile
-# MAGIC ORDER BY drift_score DESC
-# MAGIC LIMIT 30
-
-# COMMAND ----------
-
-# DBTITLE 1,[GENIE] "Which accounts are overweight in Private Credit?"
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   advisor_id,
-# MAGIC   client_id,
-# MAGIC   client_name,
-# MAGIC   account_id,
-# MAGIC   account_name,
-# MAGIC   account_type,
-# MAGIC   tier,
-# MAGIC   risk_profile,
-# MAGIC   ROUND(actual_allocation_pct, 2)   AS actual_pct,
-# MAGIC   target_allocation_pct             AS target_pct,
-# MAGIC   max_allocation_pct                AS max_pct,
-# MAGIC   ROUND(out_of_bounds_pct, 4)       AS over_band_by_pct,
-# MAGIC   ROUND(actual_market_value / 1e6, 3) AS actual_mv_m,
-# MAGIC   ROUND(total_account_value / 1e6, 3) AS account_aum_m,
-# MAGIC   ROUND(rebalance_to_band / 1e6, 3)   AS rebalance_to_band_m
-# MAGIC FROM gold_ips_drift
-# MAGIC WHERE asset_class = 'Private Credit'
-# MAGIC   AND drift_status = 'Over Band'
-# MAGIC ORDER BY over_band_by_pct DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[GENIE] "Show me all accounts outside their IPS bounds"
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   client_name,
-# MAGIC   advisor_id,
-# MAGIC   account_id,
-# MAGIC   account_name,
-# MAGIC   account_type,
-# MAGIC   asset_class,
-# MAGIC   drift_status,
-# MAGIC   drift_severity,
-# MAGIC   ROUND(actual_allocation_pct, 2)     AS actual_pct,
-# MAGIC   target_allocation_pct               AS target_pct,
-# MAGIC   min_allocation_pct                  AS min_pct,
-# MAGIC   max_allocation_pct                  AS max_pct,
-# MAGIC   out_of_bounds_pct,
-# MAGIC   ROUND(actual_market_value / 1e6, 3) AS actual_mv_m,
-# MAGIC   ROUND(total_account_value / 1e6, 3) AS account_aum_m,
-# MAGIC   ROUND(rebalance_to_band   / 1e6, 3) AS rebalance_to_band_m
-# MAGIC FROM gold_ips_drift
-# MAGIC WHERE drift_status != 'Within Band'
-# MAGIC ORDER BY out_of_bounds_pct DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[GENIE] "What is the total rebalance amount needed across all accounts?"
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   asset_class,
-# MAGIC   drift_status,
-# MAGIC   COUNT(DISTINCT account_id)                        AS accounts_impacted,
-# MAGIC   COUNT(DISTINCT client_id)                         AS clients_impacted,
-# MAGIC   ROUND(SUM(actual_market_value)  / 1e9, 3)         AS total_actual_b,
-# MAGIC   ROUND(SUM(target_market_value)  / 1e9, 3)         AS total_target_b,
-# MAGIC   ROUND(SUM(rebalance_to_band)    / 1e6, 2)         AS rebalance_to_band_m,
-# MAGIC   ROUND(SUM(ABS(rebalance_to_band)) / 1e6, 2)       AS rebalance_abs_m
-# MAGIC FROM gold_ips_drift
-# MAGIC WHERE drift_status != 'Within Band'
-# MAGIC GROUP BY asset_class, drift_status
-# MAGIC ORDER BY rebalance_abs_m DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[GENIE] "Which advisors have the most clients with IPS drift?"
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   advisor_id,
-# MAGIC   COUNT(DISTINCT client_id)                                        AS total_clients,
-# MAGIC   COUNT(DISTINCT account_id)                                       AS total_accounts,
-# MAGIC   ROUND(SUM(total_account_value) / COUNT(DISTINCT asset_class) / 1e9, 3) AS book_aum_b,
-# MAGIC   COUNT(DISTINCT CASE WHEN drift_status != 'Within Band' THEN client_id END) AS clients_with_drift,
-# MAGIC   ROUND(
-# MAGIC     COUNT(DISTINCT CASE WHEN drift_status != 'Within Band' THEN client_id END)
-# MAGIC     / NULLIF(COUNT(DISTINCT client_id), 0) * 100, 1)               AS pct_clients_drifted,
-# MAGIC   ROUND(SUM(ABS(rebalance_to_band)) / 1e6, 2)                      AS total_rebalance_abs_m
-# MAGIC FROM gold_ips_drift
-# MAGIC GROUP BY advisor_id
-# MAGIC ORDER BY clients_with_drift DESC
-
-# COMMAND ----------
-
-# DBTITLE 1,[GENIE] "What is the average allocation vs target by asset class?"
-# MAGIC %sql
-# MAGIC SELECT
-# MAGIC   asset_class,
-# MAGIC   ROUND(AVG(actual_allocation_pct),      4) AS avg_actual_pct,
-# MAGIC   ROUND(AVG(target_allocation_pct),      4) AS avg_target_pct,
-# MAGIC   ROUND(AVG(drift_from_target_pct),      4) AS avg_drift_pct,
-# MAGIC   COUNT(DISTINCT account_id)                AS total_accounts,
-# MAGIC   SUM(CASE WHEN drift_status = 'Over Band'  THEN 1 ELSE 0 END) AS over_band_count,
-# MAGIC   SUM(CASE WHEN drift_status = 'Under Band' THEN 1 ELSE 0 END) AS under_band_count,
-# MAGIC   ROUND(SUM(actual_market_value) / 1e9, 3)  AS total_actual_b,
-# MAGIC   ROUND(SUM(target_market_value) / 1e9, 3)  AS total_target_b
-# MAGIC FROM gold_ips_drift
-# MAGIC GROUP BY asset_class
-# MAGIC ORDER BY ABS(avg_drift_pct) DESC
 
 # COMMAND ----------
 
