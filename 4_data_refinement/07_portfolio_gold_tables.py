@@ -7,6 +7,7 @@
 # ]
 # ///
 
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -876,6 +877,350 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC   source_description
 # MAGIC FROM parsed
 # MAGIC ORDER BY holding_id, section_order
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE ahtsa.awm.gold_app_company_fundamentals AS
+# MAGIC WITH ranked AS (
+# MAGIC   SELECT
+# MAGIC     f.symbol,
+# MAGIC     f.company_name,
+# MAGIC     f.fiscal_year,
+# MAGIC     f.period,
+# MAGIC     f.date,
+# MAGIC     f.ebitda,
+# MAGIC     f.total_debt_to_ebitda_calc AS leverage_ratio,
+# MAGIC     f.revenue_growth_yoy AS revenue_growth,
+# MAGIC     f.interest_coverage_calc AS interest_coverage,
+# MAGIC     f.net_debt_to_ebitda AS net_debt_ebitda,
+# MAGIC     f.eps_diluted,
+# MAGIC     f.ebitda_margin_calc AS ebitda_margin_pct,
+# MAGIC     f.net_margin_calc AS net_margin_pct,
+# MAGIC     f.roe,
+# MAGIC     f.free_cash_flow,
+# MAGIC     ROW_NUMBER() OVER (PARTITION BY f.symbol ORDER BY f.date DESC) AS rn
+# MAGIC   FROM
+# MAGIC     ahtsa.awm.gold_financial_fundamentals f
+# MAGIC       INNER JOIN (
+# MAGIC         SELECT DISTINCT
+# MAGIC           ticker
+# MAGIC         FROM
+# MAGIC           ahtsa.awm.holdings
+# MAGIC       ) h
+# MAGIC         ON h.ticker = f.symbol
+# MAGIC   WHERE
+# MAGIC     f.is_etf = false
+# MAGIC ),
+# MAGIC curr AS (
+# MAGIC   SELECT
+# MAGIC     *
+# MAGIC   FROM
+# MAGIC     ranked
+# MAGIC   WHERE
+# MAGIC     rn = 1
+# MAGIC ),
+# MAGIC prior AS (
+# MAGIC   SELECT
+# MAGIC     *
+# MAGIC   FROM
+# MAGIC     ranked
+# MAGIC   WHERE
+# MAGIC     rn = 2
+# MAGIC ),
+# MAGIC paired AS (
+# MAGIC   SELECT
+# MAGIC     c.symbol,
+# MAGIC     c.company_name,
+# MAGIC     CONCAT(p.period, ' ', p.fiscal_year) AS prior_period,
+# MAGIC     CONCAT(c.period, ' ', c.fiscal_year) AS current_period,
+# MAGIC     CASE
+# MAGIC       WHEN ABS(p.ebitda) >= 1e9 THEN CONCAT('$', ROUND(p.ebitda / 1e9, 1), 'B')
+# MAGIC       ELSE CONCAT('$', ROUND(p.ebitda / 1e6, 0), 'M')
+# MAGIC     END AS ebitda_prior,
+# MAGIC     CASE
+# MAGIC       WHEN ABS(c.ebitda) >= 1e9 THEN CONCAT('$', ROUND(c.ebitda / 1e9, 1), 'B')
+# MAGIC       ELSE CONCAT('$', ROUND(c.ebitda / 1e6, 0), 'M')
+# MAGIC     END AS ebitda_curr,
+# MAGIC     ROUND((c.ebitda - p.ebitda) / NULLIF(ABS(p.ebitda), 0) * 100, 1) AS ebitda_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.ebitda >= p.ebitda THEN 'up'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS ebitda_flag,
+# MAGIC     CONCAT(ROUND(p.leverage_ratio, 1), 'x') AS lev_prior,
+# MAGIC     CONCAT(ROUND(c.leverage_ratio, 1), 'x') AS lev_curr,
+# MAGIC     ROUND(
+# MAGIC       (c.leverage_ratio - p.leverage_ratio) / NULLIF(ABS(p.leverage_ratio), 0) * 100,
+# MAGIC       1
+# MAGIC     ) AS lev_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.leverage_ratio <= p.leverage_ratio THEN 'up'
+# MAGIC         WHEN
+# MAGIC           (c.leverage_ratio - p.leverage_ratio) / NULLIF(ABS(p.leverage_ratio), 0) > 0.15
+# MAGIC         THEN
+# MAGIC           'alert'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS lev_flag,
+# MAGIC     CONCAT(
+# MAGIC       CASE
+# MAGIC         WHEN p.revenue_growth >= 0 THEN '+'
+# MAGIC         ELSE ''
+# MAGIC       END,
+# MAGIC       ROUND(p.revenue_growth * 100, 0),
+# MAGIC       '%'
+# MAGIC     ) AS rev_prior,
+# MAGIC     CONCAT(
+# MAGIC       CASE
+# MAGIC         WHEN c.revenue_growth >= 0 THEN '+'
+# MAGIC         ELSE ''
+# MAGIC       END,
+# MAGIC       ROUND(c.revenue_growth * 100, 0),
+# MAGIC       '%'
+# MAGIC     ) AS rev_curr,
+# MAGIC     ROUND(
+# MAGIC       (c.revenue_growth - p.revenue_growth) / NULLIF(ABS(p.revenue_growth), 0) * 100,
+# MAGIC       1
+# MAGIC     ) AS rev_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.revenue_growth >= p.revenue_growth THEN 'up'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS rev_flag,
+# MAGIC     CASE
+# MAGIC       WHEN p.interest_coverage IS NOT NULL THEN CONCAT(ROUND(p.interest_coverage, 1), 'x')
+# MAGIC     END AS ic_prior,
+# MAGIC     CASE
+# MAGIC       WHEN c.interest_coverage IS NOT NULL THEN CONCAT(ROUND(c.interest_coverage, 1), 'x')
+# MAGIC     END AS ic_curr,
+# MAGIC     CASE
+# MAGIC       WHEN
+# MAGIC         p.interest_coverage IS NOT NULL
+# MAGIC         AND c.interest_coverage IS NOT NULL
+# MAGIC       THEN
+# MAGIC         ROUND(
+# MAGIC           (c.interest_coverage - p.interest_coverage) / NULLIF(ABS(p.interest_coverage), 0) * 100,
+# MAGIC           1
+# MAGIC         )
+# MAGIC     END AS ic_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN
+# MAGIC           p.interest_coverage IS NOT NULL
+# MAGIC           AND c.interest_coverage IS NOT NULL
+# MAGIC         THEN
+# MAGIC           CASE
+# MAGIC             WHEN c.interest_coverage >= p.interest_coverage THEN 'up'
+# MAGIC             WHEN c.interest_coverage < 1.5 THEN 'alert'
+# MAGIC             ELSE 'down'
+# MAGIC           END
+# MAGIC       END AS STRING
+# MAGIC     ) AS ic_flag,
+# MAGIC     CONCAT(ROUND(p.net_debt_ebitda, 1), 'x') AS nd_prior,
+# MAGIC     CONCAT(ROUND(c.net_debt_ebitda, 1), 'x') AS nd_curr,
+# MAGIC     ROUND(
+# MAGIC       (c.net_debt_ebitda - p.net_debt_ebitda) / NULLIF(ABS(p.net_debt_ebitda), 0) * 100,
+# MAGIC       1
+# MAGIC     ) AS nd_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.net_debt_ebitda <= p.net_debt_ebitda THEN 'up'
+# MAGIC         WHEN c.net_debt_ebitda > 5.0 THEN 'alert'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS nd_flag,
+# MAGIC     CONCAT('$', ROUND(p.eps_diluted, 2)) AS eps_prior,
+# MAGIC     CONCAT('$', ROUND(c.eps_diluted, 2)) AS eps_curr,
+# MAGIC     ROUND((c.eps_diluted - p.eps_diluted) / NULLIF(ABS(p.eps_diluted), 0) * 100, 1) AS eps_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.eps_diluted >= p.eps_diluted THEN 'up'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS eps_flag,
+# MAGIC     CONCAT(ROUND(p.ebitda_margin_pct, 1), '%') AS em_prior,
+# MAGIC     CONCAT(ROUND(c.ebitda_margin_pct, 1), '%') AS em_curr,
+# MAGIC     ROUND(
+# MAGIC       (c.ebitda_margin_pct - p.ebitda_margin_pct) / NULLIF(ABS(p.ebitda_margin_pct), 0) * 100,
+# MAGIC       1
+# MAGIC     ) AS em_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.ebitda_margin_pct >= p.ebitda_margin_pct THEN 'up'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS em_flag,
+# MAGIC     CONCAT(ROUND(p.net_margin_pct, 1), '%') AS nm_prior,
+# MAGIC     CONCAT(ROUND(c.net_margin_pct, 1), '%') AS nm_curr,
+# MAGIC     ROUND(
+# MAGIC       (c.net_margin_pct - p.net_margin_pct) / NULLIF(ABS(p.net_margin_pct), 0) * 100,
+# MAGIC       1
+# MAGIC     ) AS nm_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.net_margin_pct >= p.net_margin_pct THEN 'up'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS nm_flag,
+# MAGIC     CONCAT(ROUND(p.roe * 100, 1), '%') AS roe_prior,
+# MAGIC     CONCAT(ROUND(c.roe * 100, 1), '%') AS roe_curr,
+# MAGIC     ROUND((c.roe - p.roe) / NULLIF(ABS(p.roe), 0) * 100, 1) AS roe_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN c.roe >= p.roe THEN 'up'
+# MAGIC         ELSE 'down'
+# MAGIC       END AS STRING
+# MAGIC     ) AS roe_flag,
+# MAGIC     CASE
+# MAGIC       WHEN
+# MAGIC         p.free_cash_flow IS NOT NULL
+# MAGIC       THEN
+# MAGIC         CASE
+# MAGIC           WHEN ABS(p.free_cash_flow) >= 1e9 THEN CONCAT('$', ROUND(p.free_cash_flow / 1e9, 1), 'B')
+# MAGIC           ELSE CONCAT('$', ROUND(p.free_cash_flow / 1e6, 0), 'M')
+# MAGIC         END
+# MAGIC     END AS fcf_prior,
+# MAGIC     CASE
+# MAGIC       WHEN
+# MAGIC         c.free_cash_flow IS NOT NULL
+# MAGIC       THEN
+# MAGIC         CASE
+# MAGIC           WHEN ABS(c.free_cash_flow) >= 1e9 THEN CONCAT('$', ROUND(c.free_cash_flow / 1e9, 1), 'B')
+# MAGIC           ELSE CONCAT('$', ROUND(c.free_cash_flow / 1e6, 0), 'M')
+# MAGIC         END
+# MAGIC     END AS fcf_curr,
+# MAGIC     CASE
+# MAGIC       WHEN
+# MAGIC         p.free_cash_flow IS NOT NULL
+# MAGIC         AND c.free_cash_flow IS NOT NULL
+# MAGIC       THEN
+# MAGIC         ROUND((c.free_cash_flow - p.free_cash_flow) / NULLIF(ABS(p.free_cash_flow), 0) * 100, 1)
+# MAGIC     END AS fcf_chg,
+# MAGIC     CAST(
+# MAGIC       CASE
+# MAGIC         WHEN
+# MAGIC           p.free_cash_flow IS NOT NULL
+# MAGIC           AND c.free_cash_flow IS NOT NULL
+# MAGIC         THEN
+# MAGIC           CASE
+# MAGIC             WHEN c.free_cash_flow >= p.free_cash_flow THEN 'up'
+# MAGIC             ELSE 'down'
+# MAGIC           END
+# MAGIC       END AS STRING
+# MAGIC     ) AS fcf_flag
+# MAGIC   FROM
+# MAGIC     curr c
+# MAGIC       JOIN prior p
+# MAGIC         ON p.symbol = c.symbol
+# MAGIC )
+# MAGIC SELECT
+# MAGIC   symbol,
+# MAGIC   company_name,
+# MAGIC   prior_period,
+# MAGIC   current_period,
+# MAGIC   sort_order,
+# MAGIC   kpi_name,
+# MAGIC   prior_value,
+# MAGIC   current_value,
+# MAGIC   change_pct,
+# MAGIC   flag,
+# MAGIC   0.0 AS covenant_value
+# MAGIC FROM
+# MAGIC   paired
+# MAGIC   LATERAL VIEW
+# MAGIC     INLINE(
+# MAGIC       ARRAY(
+# MAGIC         STRUCT(
+# MAGIC           1 AS sort_order,
+# MAGIC           'EBITDA' AS kpi_name,
+# MAGIC           ebitda_prior AS prior_value,
+# MAGIC           ebitda_curr AS current_value,
+# MAGIC           ebitda_chg AS change_pct,
+# MAGIC           ebitda_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           2 AS sort_order,
+# MAGIC           'Leverage Ratio' AS kpi_name,
+# MAGIC           lev_prior AS prior_value,
+# MAGIC           lev_curr AS current_value,
+# MAGIC           lev_chg AS change_pct,
+# MAGIC           lev_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           3 AS sort_order,
+# MAGIC           'Revenue Growth' AS kpi_name,
+# MAGIC           rev_prior AS prior_value,
+# MAGIC           rev_curr AS current_value,
+# MAGIC           rev_chg AS change_pct,
+# MAGIC           rev_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           4 AS sort_order,
+# MAGIC           'Interest Coverage' AS kpi_name,
+# MAGIC           ic_prior AS prior_value,
+# MAGIC           ic_curr AS current_value,
+# MAGIC           ic_chg AS change_pct,
+# MAGIC           ic_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           5 AS sort_order,
+# MAGIC           'Net Debt/EBITDA' AS kpi_name,
+# MAGIC           nd_prior AS prior_value,
+# MAGIC           nd_curr AS current_value,
+# MAGIC           nd_chg AS change_pct,
+# MAGIC           nd_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           6 AS sort_order,
+# MAGIC           'EPS (Diluted)' AS kpi_name,
+# MAGIC           eps_prior AS prior_value,
+# MAGIC           eps_curr AS current_value,
+# MAGIC           eps_chg AS change_pct,
+# MAGIC           eps_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           7 AS sort_order,
+# MAGIC           'EBITDA Margin' AS kpi_name,
+# MAGIC           em_prior AS prior_value,
+# MAGIC           em_curr AS current_value,
+# MAGIC           em_chg AS change_pct,
+# MAGIC           em_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           8 AS sort_order,
+# MAGIC           'Net Margin' AS kpi_name,
+# MAGIC           nm_prior AS prior_value,
+# MAGIC           nm_curr AS current_value,
+# MAGIC           nm_chg AS change_pct,
+# MAGIC           nm_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           9 AS sort_order,
+# MAGIC           'Return on Equity' AS kpi_name,
+# MAGIC           roe_prior AS prior_value,
+# MAGIC           roe_curr AS current_value,
+# MAGIC           roe_chg AS change_pct,
+# MAGIC           roe_flag AS flag
+# MAGIC         ),
+# MAGIC         STRUCT(
+# MAGIC           10 AS sort_order,
+# MAGIC           'Free Cash Flow' AS kpi_name,
+# MAGIC           fcf_prior AS prior_value,
+# MAGIC           fcf_curr AS current_value,
+# MAGIC           fcf_chg AS change_pct,
+# MAGIC           fcf_flag AS flag
+# MAGIC         )
+# MAGIC       )
+# MAGIC     ) kpi
+# MAGIC WHERE
+# MAGIC   flag IS NOT NULL
+# MAGIC ORDER BY
+# MAGIC   symbol,
+# MAGIC   sort_order
 
 # COMMAND ----------
 
