@@ -1,6 +1,7 @@
 # Databricks notebook source
 # Generate synthetic UHNW/HNW client CRM data.
-# 250 clients: 150 UHNW + 100 HNW, total AUM ~$100B (log-normal distribution).
+# 250 clients: 150 UHNW + 100 HNW, total AUM ~$300M (log-normal distribution).
+# 12 advisors → average book ~$25M, range roughly $10–50M depending on random assignment.
 # Target: {catalog}.{schema}.clients
 
 # COMMAND ----------
@@ -58,12 +59,12 @@ HNW_PROFILES = ["Moderate"] * 40 + ["Growth-HNW"] * 35 + ["Conservative"] * 25
 
 # COMMAND ----------
 
-# AUM distribution: log-normal, normalize to $95B UHNW / $5B HNW
+# AUM distribution: log-normal, normalize to $270M UHNW / $30M HNW
 uhnw_raw = np.random.lognormal(mean=19.5, sigma=1.2, size=150)
-uhnw_aum = (uhnw_raw / uhnw_raw.sum()) * 95_000_000_000
+uhnw_aum = (uhnw_raw / uhnw_raw.sum()) * 270_000_000
 
 hnw_raw = np.random.lognormal(mean=17.5, sigma=0.8, size=100)
-hnw_aum = (hnw_raw / hnw_raw.sum()) * 5_000_000_000
+hnw_aum = (hnw_raw / hnw_raw.sum()) * 30_000_000
 
 import datetime
 today         = datetime.date.today()
@@ -135,9 +136,9 @@ total_aum = clients_df["total_aum"].sum()
 print(f"Clients generated: {len(clients_df)}")
 print(f"  UHNW: {(clients_df['tier'] == 'UHNW').sum()} | HNW: {(clients_df['tier'] == 'HNW').sum()}")
 print(f"  BDC-eligible: {clients_df['bdc_eligible'].sum()}")
-print(f"  Total AUM: ${total_aum / 1e9:.2f}B")
-print(f"  UHNW AUM: ${clients_df[clients_df['tier']=='UHNW']['total_aum'].sum() / 1e9:.2f}B")
-print(f"  HNW AUM:  ${clients_df[clients_df['tier']=='HNW']['total_aum'].sum() / 1e9:.2f}B")
+print(f"  Total AUM: ${total_aum / 1e6:.1f}M")
+print(f"  UHNW AUM: ${clients_df[clients_df['tier']=='UHNW']['total_aum'].sum() / 1e6:.1f}M")
+print(f"  HNW AUM:  ${clients_df[clients_df['tier']=='HNW']['total_aum'].sum() / 1e6:.1f}M")
 print(clients_df.groupby("risk_profile")["client_id"].count().reset_index(name="count").to_string(index=False))
 
 # COMMAND ----------

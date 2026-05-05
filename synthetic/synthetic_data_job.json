@@ -1,0 +1,134 @@
+{
+  "name": "GS AWM | Synthetic Data Generation",
+  "git_source": {
+    "git_url": "https://github.com/Andrew-Tolbert/build-w-fmpapi",
+    "git_provider": "gitHub",
+    "git_branch": "main"
+  },
+  "parameters": [
+    { "name": "uc_catalog",          "default": "ahtsa"      },
+    { "name": "uc_schema",           "default": "awm"        },
+    { "name": "secret_key",          "default": "fmapi"      },
+    { "name": "limited_load",        "default": "false"      },
+    { "name": "history_start_date",  "default": "2023-01-01" }
+  ],
+  "environments": [
+    {
+      "environment_key": "serverless",
+      "spec": {
+        "client": "5",
+        "dependencies": [
+          "-r /Volumes/ahtsa/awm/job_dependencies/requirements.txt"
+        ]
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_key": "synthetic_00_advisors",
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/00_advisors",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    },
+    {
+      "task_key": "synthetic_01_clients",
+      "depends_on": [{ "task_key": "synthetic_00_advisors" }],
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/01_clients",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    },
+    {
+      "task_key": "synthetic_02_accounts",
+      "depends_on": [{ "task_key": "synthetic_01_clients" }],
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/02_accounts",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    },
+    {
+      "task_key": "synthetic_03_ips_targets",
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/03_ips_targets",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    },
+    {
+      "task_key": "synthetic_04_holdings",
+      "depends_on": [
+        { "task_key": "synthetic_02_accounts"   },
+        { "task_key": "synthetic_03_ips_targets" }
+      ],
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/04_holdings",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    },
+    {
+      "task_key": "synthetic_05_transactions",
+      "depends_on": [{ "task_key": "synthetic_04_holdings" }],
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/05_transactions",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    },
+    {
+      "task_key": "synthetic_06_validate_and_rebuild_holdings",
+      "depends_on": [{ "task_key": "synthetic_05_transactions" }],
+      "environment_key": "serverless",
+      "notebook_task": {
+        "notebook_path": "synthetic/06_validate_and_rebuild_holdings",
+        "base_parameters": {
+          "uc_catalog":         "{{job.parameters.uc_catalog}}",
+          "uc_schema":          "{{job.parameters.uc_schema}}",
+          "secret_key":         "{{job.parameters.secret_key}}",
+          "limited_load":       "{{job.parameters.limited_load}}",
+          "history_start_date": "{{job.parameters.history_start_date}}"
+        }
+      }
+    }
+  ]
+}
