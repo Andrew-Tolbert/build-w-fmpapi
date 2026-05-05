@@ -560,6 +560,228 @@ else:
 
 # COMMAND ----------
 
+# ── PART 3: Management Tone Delta — current vs. prior earnings call ────────────
+# Compares each earnings call to the immediately preceding call for the same
+# symbol (ordered by call_date), identifying tone shifts and new/dropped topics.
+
+delta_count = spark.sql(f"""
+    SELECT COUNT(*)
+    FROM (
+        SELECT symbol, year, quarter
+        FROM (
+            SELECT symbol, year, quarter,
+                   LAG(call_date) OVER (PARTITION BY symbol ORDER BY call_date) AS prior_call_date
+            FROM (
+                SELECT symbol, year, quarter, MAX(call_date) AS call_date
+                FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks
+                WHERE chunk_text IS NOT NULL
+                GROUP BY symbol, year, quarter
+            )
+        )
+        WHERE prior_call_date IS NOT NULL
+    ) all_deltable
+    LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
+        ON g.signal_id = md5(CONCAT(all_deltable.symbol, '|', CAST(all_deltable.year AS STRING), '|', CAST(all_deltable.quarter AS STRING), '|management_tone_delta'))
+""").collect()[0][0]
+
+print(f"Earnings call delta signals to process: {delta_count}")
+
+# COMMAND ----------
+
+if delta_count == 0:
+    print("No new management tone delta signals to process.")
+else:
+    spark.sql(f"""
+        MERGE INTO {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals AS tgt
+        USING (
+
+            -- ── Rank calls by call_date per symbol; LAG gives the prior call ───────
+            WITH call_sequence AS (
+                SELECT symbol, year, quarter, call_date,
+                       LAG(call_date) OVER (PARTITION BY symbol ORDER BY call_date) AS prior_call_date,
+                       LAG(year)      OVER (PARTITION BY symbol ORDER BY call_date) AS prior_year,
+                       LAG(quarter)   OVER (PARTITION BY symbol ORDER BY call_date) AS prior_quarter
+                FROM (
+                    SELECT symbol, year, quarter, MAX(call_date) AS call_date
+                    FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks
+                    WHERE chunk_text IS NOT NULL
+                    GROUP BY symbol, year, quarter
+                )
+            ),
+
+            -- ── Calls that have a prior call and no delta signal yet ─────────────
+            calls_to_score AS (
+                SELECT cs.symbol, cs.year, cs.quarter, cs.call_date,
+                       cs.prior_year, cs.prior_quarter, cs.prior_call_date
+                FROM call_sequence cs
+                LEFT ANTI JOIN {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals g
+                    ON g.signal_id = md5(CONCAT(cs.symbol, '|', CAST(cs.year AS STRING), '|', CAST(cs.quarter AS STRING), '|management_tone_delta'))
+                WHERE cs.prior_call_date IS NOT NULL
+                {_limit_clause}
+            ),
+
+            -- ── Current call text — 12 000 char cap ─────────────────────────────
+            current_texts AS (
+                SELECT c.symbol, c.year, c.quarter,
+                    LEFT(
+                        CONCAT_WS('\\n\\n', transform(
+                            sort_array(collect_list(struct(
+                                CASE c.call_section
+                                    WHEN 'prepared_remarks' THEN 0
+                                    WHEN 'qa'               THEN 1
+                                    ELSE                         2
+                                END AS sort_key,
+                                c.chunk_index AS idx,
+                                c.chunk_text  AS txt
+                            ))),
+                            x -> x.txt
+                        )),
+                        12000
+                    ) AS transcript_text
+                FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks c
+                JOIN calls_to_score cts USING (symbol, year, quarter)
+                WHERE c.chunk_text IS NOT NULL
+                GROUP BY c.symbol, c.year, c.quarter
+            ),
+
+            -- ── Prior call text — 12 000 char cap ───────────────────────────────
+            prior_texts AS (
+                SELECT cts.symbol, cts.year, cts.quarter,
+                    LEFT(
+                        CONCAT_WS('\\n\\n', transform(
+                            sort_array(collect_list(struct(
+                                CASE c.call_section
+                                    WHEN 'prepared_remarks' THEN 0
+                                    WHEN 'qa'               THEN 1
+                                    ELSE                         2
+                                END AS sort_key,
+                                c.chunk_index AS idx,
+                                c.chunk_text  AS txt
+                            ))),
+                            x -> x.txt
+                        )),
+                        12000
+                    ) AS prior_transcript_text
+                FROM {UC_CATALOG}.{UC_SCHEMA}.bronze_transcript_chunks c
+                JOIN calls_to_score cts
+                    ON c.symbol = cts.symbol
+                    AND c.year  = cts.prior_year
+                    AND c.quarter = cts.prior_quarter
+                WHERE c.chunk_text IS NOT NULL
+                GROUP BY cts.symbol, cts.year, cts.quarter
+            ),
+
+            -- ── Build comparison context ─────────────────────────────────────────
+            context AS (
+                SELECT
+                    cts.symbol, cts.year, cts.quarter, cts.call_date,
+                    cts.prior_year, cts.prior_quarter, cts.prior_call_date,
+                    CONCAT(
+                        '=== PRIOR EARNINGS CALL ===\\n',
+                        'Ticker: ', cts.symbol, '\\n',
+                        'Period: Q', CAST(cts.prior_quarter AS STRING), ' ', CAST(cts.prior_year AS STRING),
+                        ' (', CAST(cts.prior_call_date AS STRING), ')\\n',
+                        '---\\n',
+                        pt.prior_transcript_text, '\\n\\n',
+                        '=== CURRENT EARNINGS CALL ===\\n',
+                        'Ticker: ', cts.symbol, '\\n',
+                        'Period: Q', CAST(cts.quarter AS STRING), ' ', CAST(cts.year AS STRING),
+                        ' (', CAST(cts.call_date AS STRING), ')\\n',
+                        '---\\n',
+                        ct.transcript_text
+                    ) AS context_text
+                FROM calls_to_score cts
+                JOIN current_texts ct USING (symbol, year, quarter)
+                JOIN prior_texts   pt USING (symbol, year, quarter)
+                WHERE ct.transcript_text       IS NOT NULL
+                  AND pt.prior_transcript_text IS NOT NULL
+            ),
+
+            -- ── One ai_query per call pair ───────────────────────────────────────
+            extracted AS (
+                SELECT
+                    symbol, year, quarter, call_date, prior_year, prior_quarter, prior_call_date,
+                    TRIM(REGEXP_REPLACE(
+                        ai_query(
+                            '{LLM_ENDPOINT}',
+                            CONCAT(
+                                'You are a Goldman Sachs wealth advisor analyst comparing two consecutive earnings call transcripts ',
+                                'for the same company.\\n\\n',
+                                'Identify the key changes in management tone and content between the prior and current calls.\\n\\n',
+                                'Assess:\\n',
+                                '1. Direction of tone shift: has management become more positive (Improving), more negative ',
+                                '(Deteriorating), or stayed roughly the same (Stable)?\\n',
+                                '2. New topics or themes introduced in the current call that were absent or minor in the prior call.\\n',
+                                '3. Topics that disappeared or received noticeably less emphasis.\\n',
+                                '4. Notable language changes — new hedging, changed guidance specificity, shifts in confidence.\\n\\n',
+                                'Return JSON only — no markdown, no surrounding text:\\n',
+                                '{{"direction": "Improving|Deteriorating|Stable", ',
+                                '"summary": "<1-2 sentence high-level summary of the shift>", ',
+                                '"rationale": "<3-5 sentence analysis covering tone shift, new topics, dropped topics, and notable language changes>"}}\\n\\n',
+                                context_text
+                            )
+                        ),
+                        '```json|```', ''
+                    )) AS delta_json
+                FROM context
+            ),
+
+            -- ── Parse JSON response ──────────────────────────────────────────────
+            parsed AS (
+                SELECT
+                    symbol, year, quarter, call_date, prior_year, prior_quarter, prior_call_date,
+                    from_json(delta_json, 'STRUCT<direction:STRING, summary:STRING, rationale:STRING>') AS delta
+                FROM extracted
+            )
+
+            SELECT
+                md5(CONCAT(symbol, '|', CAST(year AS STRING), '|', CAST(quarter AS STRING), '|management_tone_delta')) AS signal_id,
+                symbol,
+                TRY_CAST(call_date AS DATE)                                           AS signal_date,
+                'earnings_transcript'                                                 AS source_type,
+                CONCAT(symbol, ' Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING),
+                       ' vs Q', CAST(prior_quarter AS STRING), ' ', CAST(prior_year AS STRING),
+                       ' — Management Tone Delta')                                    AS source_description,
+                delta.direction                                                       AS sentiment,
+                CASE delta.direction
+                    WHEN 'Deteriorating' THEN 0.9
+                    ELSE                      0.2
+                END                                                                   AS severity_score,
+                delta.direction = 'Deteriorating'                                     AS advisor_action_needed,
+                'Management Tone - Delta'                                             AS signal_type,
+                CONCAT('Q', CAST(quarter AS STRING), ' ', CAST(year AS STRING), ' Management Tone Delta') AS signal,
+                delta.summary                                                         AS signal_value,
+                delta.rationale                                                       AS rationale,
+                CURRENT_TIMESTAMP()                                                   AS processed_at
+            FROM parsed
+            WHERE delta.direction IS NOT NULL
+              AND delta.summary   IS NOT NULL
+              AND delta.rationale IS NOT NULL
+
+        ) AS src
+        ON tgt.signal_id = src.signal_id
+        WHEN MATCHED THEN UPDATE SET
+            tgt.sentiment             = src.sentiment,
+            tgt.severity_score        = src.severity_score,
+            tgt.advisor_action_needed = src.advisor_action_needed,
+            tgt.signal_type           = src.signal_type,
+            tgt.signal                = src.signal,
+            tgt.signal_value          = src.signal_value,
+            tgt.rationale             = src.rationale,
+            tgt.processed_at          = src.processed_at
+        WHEN NOT MATCHED THEN INSERT (
+            signal_id, symbol, signal_date, source_type, source_description,
+            sentiment, severity_score, advisor_action_needed, signal_type, signal, signal_value, rationale, processed_at
+        ) VALUES (
+            src.signal_id, src.symbol, src.signal_date, src.source_type,
+            src.source_description, src.sentiment, src.severity_score, src.advisor_action_needed,
+            src.signal_type, src.signal, src.signal_value, src.rationale, src.processed_at
+        )
+    """)
+    print(f"Merged management tone delta signals from {delta_count} earnings call pairs into gold_unified_signals.")
+
+# COMMAND ----------
+
 display(
     spark.sql(f"""
         SELECT symbol, signal_date, source_type, signal_type, source_description,
