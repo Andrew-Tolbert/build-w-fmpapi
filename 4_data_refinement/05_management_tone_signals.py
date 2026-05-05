@@ -7,26 +7,32 @@
 # ]
 # ///
 # Generate Management Tone signals for earnings transcripts and SEC 10-K/8-K filings.
-# Produces one overall signal per document AND one signal per section.
+# Produces one overall signal per document, one signal per section, and one delta
+# signal comparing each earnings call to the immediately preceding call.
 #
 # Signal types:
 #   Management Tone - Overall    — holistic score across all sections
 #   Management Tone - <section>  — score for each individual section
 #     Transcript sections: prepared_remarks, qa
 #     SEC sections:        mda, risk_factors, financial_statements, full_text
+#   Management Tone - Delta      — tone shift vs. prior earnings call (transcripts only)
 #
-# Management Tone is a sentiment probability distribution stored as a JSON array string:
+# Tone distribution signals store signal_value as a JSON array string:
 #   signal_value = "[negative, neutral, positive]"  e.g. "[0.1,0.5,0.4]"
 # The three values sum to 1.0. The frontend maps them to display labels/charts.
 #
+# Delta signals store signal_value as a plain-text 1-2 sentence summary of the shift.
+# sentiment = Improving | Deteriorating | Stable; rationale = detailed narrative.
+#
 # Sources:
-#   earnings_transcript  — overall + per-section per (symbol, year, quarter)
+#   earnings_transcript  — overall + per-section + delta per (symbol, year, quarter)
 #   sec_filing_10-K      — overall + per-section per filing
 #   sec_filing_8-K       — overall + per-section per filing
 #
 # Signal ID construction (guaranteed non-colliding):
 #   transcript overall:  md5(symbol|year|quarter|management_tone_overall)
 #   transcript section:  md5(symbol|year|quarter|section|management_tone)
+#   transcript delta:    md5(symbol|year|quarter|management_tone_delta)
 #   SEC overall:         md5(symbol|accession|management_tone_overall)
 #   SEC section:         md5(symbol|accession|section|management_tone)
 #
@@ -785,7 +791,7 @@ else:
 display(
     spark.sql(f"""
         SELECT symbol, signal_date, source_type, signal_type, source_description,
-               signal_value AS tone_distribution,
+               signal_value,
                sentiment, advisor_action_needed, severity_score,
                LEFT(rationale, 250) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
