@@ -89,37 +89,35 @@ print(f"\nTotal rows: {len(raw)}")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC # ── Build the two DataFrames and register as Spark temp views ──────────────────
-# MAGIC
-# MAGIC # View 1: bdc_time_series — every data point, long format
-# MAGIC bdc_time_series = raw[["ticker", "cik", "metric", "period_end", "fiscal_period", "numeric_value"]].copy()
-# MAGIC bdc_time_series["period_end"] = pd.to_datetime(bdc_time_series["period_end"])
-# MAGIC
-# MAGIC # View 2: bdc_fy_snapshot — latest FY value per ticker/metric, pivoted wide
-# MAGIC bdc_fy_snapshot = (
-# MAGIC     raw[raw["fiscal_period"] == "FY"]
-# MAGIC     .sort_values("period_end")
-# MAGIC     .drop_duplicates(subset=["ticker", "metric"], keep="last")
-# MAGIC     .pivot(index=["ticker", "cik"], columns="metric", values="numeric_value")
-# MAGIC     .reset_index()
-# MAGIC )
-# MAGIC # Flatten column names after pivot
-# MAGIC bdc_fy_snapshot.columns.name = None
-# MAGIC
-# MAGIC spark.createDataFrame(bdc_time_series).createOrReplaceTempView("bdc_time_series")
-# MAGIC spark.createDataFrame(bdc_fy_snapshot).createOrReplaceTempView("bdc_fy_snapshot")
-# MAGIC
-# MAGIC print("Temp views registered: bdc_time_series, bdc_fy_snapshot")
-# MAGIC print(f"bdc_time_series: {len(bdc_time_series)} rows")
-# MAGIC print(f"bdc_fy_snapshot: {len(bdc_fy_snapshot)} rows  |  columns: {list(bdc_fy_snapshot.columns)}")
+# ── Build the two DataFrames and register as Spark temp views ──────────────────
+
+# View 1: bdc_time_series — every data point, long format
+bdc_time_series = raw[["ticker", "cik", "metric", "period_end", "fiscal_period", "numeric_value"]].copy()
+bdc_time_series["period_end"] = pd.to_datetime(bdc_time_series["period_end"])
+
+# View 2: bdc_fy_snapshot — latest FY value per ticker/metric, pivoted wide
+bdc_fy_snapshot = (
+    raw[raw["fiscal_period"] == "FY"]
+    .sort_values("period_end")
+    .drop_duplicates(subset=["ticker", "metric"], keep="last")
+    .pivot(index=["ticker", "cik"], columns="metric", values="numeric_value")
+    .reset_index()
+)
+# Flatten column names after pivot
+bdc_fy_snapshot.columns.name = None
+
+spark.createDataFrame(bdc_time_series).createOrReplaceTempView("bdc_time_series")
+spark.createDataFrame(bdc_fy_snapshot).createOrReplaceTempView("bdc_fy_snapshot")
+
+print("Temp views registered: bdc_time_series, bdc_fy_snapshot")
+print(f"bdc_time_series: {len(bdc_time_series)} rows")
+print(f"bdc_fy_snapshot: {len(bdc_fy_snapshot)} rows  |  columns: {list(bdc_fy_snapshot.columns)}")
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC # ── Inspect the raw data before any calculations ───────────────────────────────
+# MAGIC --  Inspect the raw data before any calculations ───────────────────────────────
 # MAGIC
-# MAGIC %sql
 # MAGIC SELECT ticker, cik, metric, COUNT(*) AS periods,
 # MAGIC        MIN(period_end) AS earliest, MAX(period_end) AS latest
 # MAGIC FROM   bdc_time_series
@@ -435,3 +433,12 @@ print(f"\nTotal rows: {len(raw)}")
 # MAGIC LEFT JOIN  t3_rl    USING (ticker, cik)
 # MAGIC LEFT JOIN  t3_cum   USING (ticker, cik)
 # MAGIC ORDER BY   s.ticker
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from ahtsa.awm.gold_bdc_early_warnings
+
+# COMMAND ----------
+
+
