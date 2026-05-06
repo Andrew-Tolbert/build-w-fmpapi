@@ -742,10 +742,7 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC %sql
 # MAGIC CREATE OR REPLACE TABLE ahtsa.awm.gold_app_holdings_list AS
 # MAGIC WITH latest_date AS (
-# MAGIC   SELECT
-# MAGIC     MAX(date) AS max_date
-# MAGIC   FROM
-# MAGIC     ahtsa.awm.holdings
+# MAGIC   SELECT MAX(date) AS max_date FROM ahtsa.awm.holdings
 # MAGIC ),
 # MAGIC advisor_holdings AS (
 # MAGIC   -- Distinct ticker per advisor from the most recent holdings snapshot, excluding cash
@@ -754,30 +751,18 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC     h.ticker,
 # MAGIC     h.asset_class,
 # MAGIC     SUM(h.market_value) / 1e6 AS aum_millions
-# MAGIC   FROM
-# MAGIC     ahtsa.awm.holdings h
-# MAGIC       JOIN ahtsa.awm.accounts a
-# MAGIC         ON a.account_id = h.account_id
-# MAGIC       JOIN ahtsa.awm.clients c
-# MAGIC         ON c.client_id = a.client_id
-# MAGIC       JOIN latest_date ld
-# MAGIC         ON h.date = ld.max_date
-# MAGIC   WHERE
-# MAGIC     h.ticker != 'CASH'
-# MAGIC   GROUP BY
-# MAGIC     c.advisor_id,
-# MAGIC     h.ticker,
-# MAGIC     h.asset_class
+# MAGIC   FROM ahtsa.awm.holdings h
+# MAGIC     JOIN ahtsa.awm.accounts a ON a.account_id = h.account_id
+# MAGIC     JOIN ahtsa.awm.clients c ON c.client_id = a.client_id
+# MAGIC     JOIN latest_date ld ON h.date = ld.max_date
+# MAGIC   WHERE h.ticker != 'CASH'
+# MAGIC   GROUP BY c.advisor_id, h.ticker, h.asset_class
 # MAGIC ),
 # MAGIC alert_tickers AS (
 # MAGIC   -- Tickers flagged: advisor_action_needed + Negative sentiment within last 2 quarters
-# MAGIC   SELECT
-# MAGIC   DISTINCT
-# MAGIC     symbol
-# MAGIC   FROM
-# MAGIC     ahtsa.awm.gold_unified_signals
-# MAGIC   WHERE
-# MAGIC     advisor_action_needed = true
+# MAGIC   SELECT DISTINCT symbol
+# MAGIC   FROM ahtsa.awm.gold_unified_signals
+# MAGIC   WHERE advisor_action_needed = true
 # MAGIC     AND LOWER(sentiment) = 'negative'
 # MAGIC     AND source_type != 'news'
 # MAGIC     AND signal_date >= ADD_MONTHS(CURRENT_DATE(), -6)
@@ -785,25 +770,40 @@ print(f"Using: {UC_CATALOG}.{UC_SCHEMA}")
 # MAGIC SELECT
 # MAGIC   ah.advisor_id,
 # MAGIC   ah.ticker AS holding_id,
-# MAGIC   COALESCE(p.companyName, ah.ticker) AS name,
+# MAGIC   COALESCE(p.companyName, e.name, ah.ticker) AS name,
 # MAGIC   ah.asset_class,
-# MAGIC   COALESCE(NULLIF(p.sector, ''), NULLIF(p.industry, ''), ah.asset_class) AS strategy,
-# MAGIC   ROUND(ah.aum_millions, 2) AS aum_millions,
+# MAGIC   -- ETFs: use the single 100%-exposure sector if one exists, otherwise ETF asset class.
+# MAGIC   -- Companies: fall back to sector → industry → holdings asset_class.
 # MAGIC   CASE
-# MAGIC     WHEN al.symbol IS NOT NULL THEN 'alert'
-# MAGIC     ELSE 'ok'
-# MAGIC   END AS risk_flag
-# MAGIC FROM
-# MAGIC   advisor_holdings ah
-# MAGIC     LEFT JOIN ahtsa.awm.bronze_company_profiles p
-# MAGIC       ON p.symbol = ah.ticker
-# MAGIC     LEFT JOIN alert_tickers al
-# MAGIC       ON al.symbol = ah.ticker
-# MAGIC ORDER BY
-# MAGIC   ah.advisor_id,
-# MAGIC   risk_flag,
-# MAGIC   ah.asset_class,
-# MAGIC   ah.ticker
+# MAGIC     WHEN e.symbol IS NOT NULL THEN
+# MAGIC       CASE WHEN SIZE(FILTER(e.sectorsList, s -> s.exposure = 100.0)) = 1
+# MAGIC            THEN FILTER(e.sectorsList, s -> s.exposure = 100.0)[0].industry
+# MAGIC            ELSE e.assetClass
+# MAGIC       END
+# MAGIC     ELSE COALESCE(NULLIF(p.sector, \'\'), NULLIF(p.industry, \'\'), ah.asset_class)
+# MAGIC   END AS strategy,
+# MAGIC   ROUND(ah.aum_millions, 2) AS aum_millions,
+# MAGIC   CASE WHEN al.symbol IS NOT NULL THEN 'alert' ELSE 'ok' END AS risk_flag
+# MAGIC FROM advisor_holdings ah
+# MAGIC   LEFT JOIN ahtsa.awm.bronze_company_profiles p ON p.symbol = ah.ticker
+# MAGIC   LEFT JOIN ahtsa.awm.bronze_etf_info e ON e.symbol = ah.ticker
+# MAGIC   LEFT JOIN alert_tickers al ON al.symbol = ah.ticker
+# MAGIC ORDER BY ah.advisor_id, risk_flag, ah.asset_class, ah.ticker
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from ahtsa.awm.gold_app_holdings_list
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from ahtsa.awm.bronze_company_profiles
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC select * from ahtsa.awm.bronze_etf_info
 
 # COMMAND ----------
 
