@@ -825,6 +825,11 @@ display(
                LEFT(rationale, 250) AS rationale_preview
         FROM {UC_CATALOG}.{UC_SCHEMA}.gold_unified_signals
         WHERE signal_type LIKE 'Management Tone%'
+        and advisor_action_needed = true 
         ORDER BY symbol, signal_date DESC, signal_type
     """)
 )
+
+# COMMAND ----------
+
+

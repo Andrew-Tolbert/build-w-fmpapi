@@ -14,7 +14,7 @@ UC_SCHEMA  = "awm"
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC select * from ahtsa.awm.gold_unified_signals where signal_type LIKE '%Management Tone%'
+# MAGIC select * from ahtsa.awm.gold_unified_signals where signal_type LIKE '%Management Tone%' and source_type ='earnings_transcript'
 
 # COMMAND ----------
 
@@ -25,6 +25,11 @@ UC_SCHEMA  = "awm"
 # MAGIC Delta (section_order=4) is excluded until QoQ string-parsing logic is added.
 # MAGIC
 # MAGIC `signal_value` layout: `[neg_frac, neu_frac, pos_frac]` — multiplied × 100 and cast to INT.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC TRUNCATE TABLE ahtsa.awm.gold_app_management_tone 
 
 # COMMAND ----------
 
@@ -42,7 +47,7 @@ UC_SCHEMA  = "awm"
 # MAGIC     ROW_NUMBER() OVER (PARTITION BY symbol, signal_type ORDER BY signal_date DESC)       AS rn,
 # MAGIC     LEAD(source_description, 1) OVER (PARTITION BY symbol, signal_type ORDER BY signal_date DESC) AS prior_source_description
 # MAGIC   FROM ahtsa.awm.gold_unified_signals
-# MAGIC   WHERE signal_type LIKE '%Management Tone%'
+# MAGIC   WHERE signal_type LIKE '%Management Tone%' and source_type = 'earnings_transcript'
 # MAGIC ),
 # MAGIC parsed AS (
 # MAGIC   SELECT
@@ -63,11 +68,13 @@ UC_SCHEMA  = "awm"
 # MAGIC     WHEN 'Management Tone - prepared_remarks' THEN 'Prepared Remarks'
 # MAGIC     WHEN 'Management Tone - qa'               THEN 'Q&A'
 # MAGIC     WHEN 'Management Tone - Overall'          THEN 'Overall'
+# MAGIC     WHEN 'Management Tone - Delta'            THEN 'Delta'
 # MAGIC   END                                                                AS section,
 # MAGIC   CASE signal_type
 # MAGIC     WHEN 'Management Tone - prepared_remarks' THEN 1
 # MAGIC     WHEN 'Management Tone - qa'               THEN 2
 # MAGIC     WHEN 'Management Tone - Overall'          THEN 3
+# MAGIC     WHEN 'Management Tone - Delta'            THEN 4
 # MAGIC   END                                                                AS section_order,
 # MAGIC   CAST(ROUND(tone_array[2] * 100) AS INT)                           AS positive_pct,
 # MAGIC   CAST(ROUND(tone_array[1] * 100) AS INT)                           AS neutral_pct,
@@ -87,7 +94,3 @@ UC_SCHEMA  = "awm"
 
 # MAGIC %sql
 # MAGIC select * from ahtsa.awm.gold_app_management_tone where holding_id = 'TSLA'
-
-# COMMAND ----------
-
-
